@@ -83,16 +83,6 @@ def spoken_math_detection(text, model_name):
     result = [r for r in result if r[0] not in ['[CLS]', '[SEP]']]
 
     return result
-
-# 사용 예시
-if __name__ == "__main__":
-    model_name = "jeongyoun/MathBridge_split"
-    sample_text = "The sum of 3 and 5 is equal to 8."
-    
-    detection_result = spoken_math_detection(sample_text, model_name)
-    print("Detection Result:")
-    for token, label in detection_result:
-        print(f"{token}: {label}")
     
     
     
