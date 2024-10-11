@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 
 # Load the Braille mapping
-nemeth_json_path = os.path.join('/Users/lobeli/Desktop/학부인턴/spokenmath2braille/latex2nemeth-code/src/main/resources/encoding/nemeth.json')
+nemeth_json_path = os.path.join('latex2nemeth/src/main/resources/encoding/nemeth.json')
 with open(nemeth_json_path, 'r', encoding='utf-8') as f:
     braille_map = json.load(f)
 
@@ -66,8 +66,8 @@ def compile_latex(tex_file='temp.tex', aux_file='temp.aux'):
 def texFile2Nemeth():
     texFile = Path("temp.tex").resolve()
     auxFile = Path("temp.aux").resolve()
-    nemethJson = Path("latex2nemeth-code/target/classes/encoding/nemeth.json").resolve()
-    jarFile = Path("latex2nemeth-code/target/latex2nemeth.jar").resolve()
+    nemethJson = Path("latex2nemeth/target/classes/encoding/nemeth.json").resolve()
+    jarFile = Path("latex2nemeth/target/latex2nemeth.jar").resolve()
 
     cmd = [
         "java",
@@ -98,11 +98,11 @@ def readNemethFile():
     return eqnNemeth
 
 def latex2Nemeth(equations):
-    opening, closing = "⠸⠩", "⠸⠱"
-    writeTex(equations)
-    compile_latex('temp.tex', 'temp.aux')
-    texFile2Nemeth()
-    eqnNemeth = readNemethFile()
+    opening, closing = "⠸⠩", "⠸⠱" 
+    writeTex(equations) #writing temp.tex file 
+    compile_latex('temp.tex', 'temp.aux') #making aux file
+    texFile2Nemeth() #converting tex to nemeth 
+    eqnNemeth = readNemethFile() #nemeth to readable utf-16 
     for i, eqn in enumerate(equations):
         if eqn['content'] is not None:
             eqn['braille'] = opening + eqnNemeth[i] + closing
@@ -116,12 +116,12 @@ def latex_to_nemeth(latex):
     nemeth_equations = latex2Nemeth(equations)
     return nemeth_equations[0]['braille'] if nemeth_equations else ''
 
-def text2UEB(texts):
+def text2UEB(texts): #이 코드 있어야 하는지 점검! 
     for txt in texts:
         txt['braille'] = getBraille(txt['content'])
     return texts
 
-def writeToMasterBraille(brailleFile, parserOut, pageNo):
+def writeToMasterBraille(brailleFile, parserOut, pageNo): #이 코드 있어야 하는지 점검! 
     brailleFile.write("Page no: " + str(pageNo) + '\n')
     brailleFile.write(getBraille("Page no: " + str(pageNo)) + '\n')
     for x in parserOut:
