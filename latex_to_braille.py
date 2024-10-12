@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 
 # Load the Braille mapping
-nemeth_json_path = os.path.join('latex2nemeth/src/main/resources/encoding/nemeth.json')
+nemeth_json_path = os.path.join('latex2nemeth/src/main/resources/encodings/nemeth.json')
 with open(nemeth_json_path, 'r', encoding='utf-8') as f:
     braille_map = json.load(f)
 
@@ -66,7 +66,7 @@ def compile_latex(tex_file='temp.tex', aux_file='temp.aux'):
 def texFile2Nemeth():
     texFile = Path("temp.tex").resolve()
     auxFile = Path("temp.aux").resolve()
-    nemethJson = Path("latex2nemeth/target/classes/encoding/nemeth.json").resolve()
+    nemethJson = Path("latex2nemeth/target/classes/encodings/nemeth.json").resolve()
     jarFile = Path("latex2nemeth/target/latex2nemeth.jar").resolve()
 
     cmd = [
