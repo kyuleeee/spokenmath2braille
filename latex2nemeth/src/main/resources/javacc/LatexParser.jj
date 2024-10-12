@@ -1,0 +1,4219 @@
+/* LatexParser.jj 
+	A (not so) simple LaTeX parser for  Braille/Nemeth generation.
+	Authors Andreas Papasalouros, Aggelos Giantsos 2014-2022.
+*/
+
+options {	
+	STATIC = false;
+	UNICODE_INPUT = true; // UNICODE input!
+}
+PARSER_BEGIN(Latex)
+
+package com.latex2nemeth.parser;
+import java.io.*;
+import java.util.regex.*;
+import java.util.Vector;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Stack;
+
+import com.latex2nemeth.ast.*;
+import com.latex2nemeth.utils.*;
+import com.latex2nemeth.symbols.*;
+import com.latex2nemeth.parser.aux.*;
+import com.latex2nemeth.io.*;
+
+public class Latex {
+
+	
+	class Command {
+		String name;
+		int numOfParams;
+		String body;
+		String[] params;
+		Command(String name,String body){
+			this.name = name;
+			this.body = body;
+		}
+		Command(String name, int numOfParams, String body){
+			this(name,body);
+			this.numOfParams=numOfParams;
+			if (numOfParams > 0)			
+				params = new String[numOfParams];		
+		}
+	}
+
+	class MathCommand {
+		String name;
+		int numOfParams;
+		String body;
+		Expression[] params;
+		MathCommand(String name, String body){
+			this.name = name;
+			this.body = body;
+		}
+		MathCommand(String name, int numOfParams, String body){
+			this(name,body);
+			this.numOfParams=numOfParams;
+			if (numOfParams > 0)			
+				params = new Expression[numOfParams];		
+		}
+	}
+	
+	Command currentMacro;	
+	MathCommand currentMathMacro;
+
+  	static final int MAX_WIDTH = 28;
+	static int COLUMN = 0;
+	static StringBuffer WORD = new StringBuffer(); 
+	NemethTable table;
+	HashMap<String, Command > commandTable = new HashMap<String, Command >();
+	HashMap<String, MathCommand > commandMathTable = new HashMap<String, MathCommand >();
+	static HashMap<String, Theorem> theorems = new HashMap<String,Theorem >();
+	static HashMap<String, String> operatorsTable = new HashMap<String, String>();
+	
+    
+    static Writer output;
+	static String outputFileName;
+	int enumeratedepth = 0;
+	private static LabelTable labeltable;
+	int lineNumber=0;
+	static ParsedChapters parsedChapters;
+	
+	static int chapter = 0;
+	static int section = 0;
+	static int subsection = 0;
+	private int picture = 0;
+	private boolean inFigure = false;
+	private Preamble preamble;
+
+	private int tabularcolumn = 0;
+	private boolean verbose;
+
+	
+
+    	private void printMessage(String msg) {
+    	  if (verbose) {
+    	    System.out.println(msg);
+    	  }
+    	}
+    		
+    	
+    private String getLetterCode(String symbol) {
+        String code = table.getLetterCode(symbol);
+        if (code == null) {  
+            printMessage("UNKNOWN TEXT SYMBOL: " + symbol + " at line: " + jj_input_stream.getEndLine());
+            return "";
+        }
+        return code;
+    }
+
+    private String getTheoremCode(String symbol) {
+        String code = table.getTheoremCode(symbol);
+        if (code == null) {
+            printMessage("UNKNOWN THEOREM SYMBOL: " + symbol + " at line: " + jj_input_stream.getEndLine());
+            return "";
+        }
+        return code;
+    }
+	
+    private String getMathCode(String symbol) {
+        String code = table.getMathCode(symbol);
+        if (code == null) {
+            printMessage("UNKNOWN MATH SYMBOL: " + symbol + " at line: " + jj_input_stream.getEndLine());
+            return "";
+        }
+        return code;
+    }
+
+    String string2Braille(String str) {
+        StringBuffer buffer = new StringBuffer();
+
+        for (int pos = 0; pos < str.length(); pos++) {
+            String c = Character.toString(str.charAt(pos));
+            buffer.append(getLetterCode(c));
+        }
+
+        return buffer.toString();
+    }
+
+    String string2BrailleTheorem(String str) {
+        StringBuffer buffer = new StringBuffer();
+
+        for (int pos = 0; pos < str.length(); pos++) {
+            String c = Character.toString(str.charAt(pos));
+            buffer.append(getTheoremCode(c));
+        }
+
+        return buffer.toString();
+    }
+
+    static String italic(String s) {
+        return "\u2820\u2804\u2838" + s + "\u2838\u2820\u2804";
+    }
+
+    String bold(String s) {
+        return getLetterCode("\\textbf-open") + s + getLetterCode("\\textbf-close");
+    }
+
+    static String sansserif(String s) {
+        return s;
+    }
+
+    static String scriptenglish(String s) {
+        return s;
+    }
+
+    static boolean checkforPreviousSpace(Token t) {
+        boolean space = t.specialToken != null;
+        return space;
+    }
+
+//    boolean isOperator(Expression exp){
+//        if (exp instanceof SimpleExpression){
+//            return operatorsTable.
+//                containsKey(((SimpleExpression) exp).getTokenString());
+//        }
+//        return false;
+//    }
+
+    void initOperatorsTable(){
+        operatorsTable.put("\\sum","\\sum@"); 
+        operatorsTable.put("\\prod","\\prod@");
+        operatorsTable.put("\\projlim","\\textrm{projlim}");
+        operatorsTable.put("\\injlim","\\textrm{injlim}");
+        operatorsTable.put("\\varinjlim","\\varinjlim@");
+        operatorsTable.put("\\varprojlim","\\varprojlim@");
+        operatorsTable.put("\\bigotimes","\\bigotimes@");
+       	operatorsTable.put("\\bigoplus","\\bigoplus@");
+       	operatorsTable.put("\\coprod","\\coprod@");
+       	operatorsTable.put("\\bigcup","\\bigcup@");
+       	operatorsTable.put("\\bigcap","\\bigcap@");
+       	operatorsTable.put("\\bigsqcap","\\bigsqcap@");
+		operatorsTable.put("\\bigvee","\\bigvee@");
+       	operatorsTable.put("\\bigwedge","\\bigwedge@");
+       	operatorsTable.put("\\bigodot","\\bigodot@");
+       	operatorsTable.put("\\biguplus","\\biguplus@");
+         
+        //... Add more commands. All operators 
+    }
+
+    MathExpression createOverExp(Expression base, Expression over) {
+        
+        MathExpression newexp = new MathExpression(table);
+        // We should put the beginning of symbol (Braille-5 symbol here...). Ask Antonis.
+        newexp.addChild(base);
+	 	newexp.addChild(new SimpleExpression("\\overset", table));
+	  	newexp.addChild(over);
+        newexp.addChild(new SimpleExpression("\\dot-end", table));
+
+        return newexp;
+    }
+
+     MathExpression createUnderExp(Expression base, Expression under){
+        
+        MathExpression newexp = new MathExpression(table);
+	 	newexp.addChild(base);
+	 	newexp.addChild(new SimpleExpression("\\underset", table));
+	  	newexp.addChild(under);
+        newexp.addChild(new SimpleExpression("\\dot-end", table));
+
+        return newexp;
+     }
+
+    MathExpression createOverUnderExp(Expression base, 
+        Expression under, Expression over){
+
+        MathExpression newexp = new MathExpression(table);
+        newexp.addChild(base);
+	 	newexp.addChild(new SimpleExpression("\\underset", table));
+	  	newexp.addChild(under);
+        newexp.addChild(new SimpleExpression("\\overset", table));
+	  	newexp.addChild(over);
+        newexp.addChild(new SimpleExpression("\\dot-end", table));
+        
+        return newexp;
+     }
+
+
+    public Latex(NemethTable table, InputStreamReader inputStreamReader, Preamble preamble, boolean verbose) {
+        this(inputStreamReader);
+        this.table = table;
+        this.preamble = preamble;
+        this.verbose = verbose;
+        initOperatorsTable(); //Duplicating. Fix
+    }
+
+    public Latex(NemethTable table, InputStreamReader inputStreamReader, 
+    	Command cmd, HashMap<String, Command> commandTable, boolean verbose)
+    {
+	this(inputStreamReader);
+	this.table = table;
+	this.currentMacro = cmd;
+	this.commandTable = commandTable;
+	this.verbose = verbose;
+	initOperatorsTable(); //Duplicating. Fix
+   }
+
+
+  public Latex(NemethTable table, InputStreamReader inputStreamReader, MathCommand cmd, HashMap<String, MathCommand> mathCommandTable, boolean verbose)
+    {
+	this(inputStreamReader);
+	this.table = table;
+	this.currentMathMacro = cmd;
+	this.commandMathTable = mathCommandTable;
+	this.verbose = verbose;
+	initOperatorsTable(); //Duplicating. Fix
+   }
+
+
+    public static ParsedChapters parse(String texFile, String auxFile, NemethTable table, Preamble preamble, boolean verbose) throws ParseException, TokenMgrError, IOException {
+
+        parsedChapters = new ParsedChapters();
+
+        FileInputStream fileInputStream = new FileInputStream(texFile);
+        InputStreamReader inputStreamReader = new InputStreamReader(fileInputStream, "UTF-8");
+        System.out.println("Parsing file: " + texFile);
+
+        labeltable = new LabelTable();
+        labeltable.createlabels(auxFile);
+
+        output = new StringWriter();
+
+        WORD = new StringBuffer();
+        Latex parser = new Latex(table, inputStreamReader, preamble, verbose);
+
+        parser.latex();
+
+        inputStreamReader.close();
+        fileInputStream.close();
+
+        output.flush(); //??
+        output.close();
+        parsedChapters.put(chapter, output.toString());
+        return parsedChapters;
+    }
+
+   
+
+
+}
+PARSER_END(Latex)
+
+//SKIP : {" "}
+SPECIAL_TOKEN : { " " | "\t" | "\n" | "\r" | "\r\n" }
+
+//SKIP : { "\n" | "\r" | "\r\n" }
+// Latex comments.
+SKIP : {<"%" (~["\n"])* "\n">}
+
+//TOKEN : {<WORD:  (~[" "])+ " " >}
+
+TOKEN : {<TWONEWLINES : "\n\n" | "\r\n\r\n" | "\r\r">}
+
+TOKEN : {<BEG : "\\begin" (" ")* "{"> : ENVSTATE}
+<ENVSTATE> TOKEN : {<ARRAY: "array">: ENVENDSTATE}
+<ENVSTATE> TOKEN : {<SUBARRAY: "subarray">: ENVENDSTATE}
+<ENVSTATE> TOKEN : {<MATRIX: "matrix">: ENVENDSTATE}
+<ENVSTATE> TOKEN : {<SMALLMATRIX: "smallmatrix">: ENVENDSTATE}
+<ENVSTATE> TOKEN : {<PMATRIX: "pmatrix">: ENVENDSTATE}
+<ENVSTATE> TOKEN : {<BMATRIX: "bmatrix">: ENVENDSTATE}
+<ENVSTATE> TOKEN : {<BBMATRIX: "Bmatrix">: ENVENDSTATE}
+<ENVSTATE> TOKEN : {<VMATRIX: "vmatrix">: ENVENDSTATE}
+<ENVSTATE> TOKEN : {<VVMATRIX: "Vmatrix">: ENVENDSTATE}
+<ENVSTATE> TOKEN : {<CASESENV: "cases">: ENVENDSTATE}
+<ENVSTATE> TOKEN : {<SPLIT: "split">: ENVENDSTATE}
+<ENVSTATE> TOKEN : {<ALIGNED: "aligned">: ENVENDSTATE}
+<ENVSTATE> TOKEN : {<GATHERED: "gathered">: ENVENDSTATE}
+<ENVSTATE> TOKEN : {<ALIGNEDAT: "alignedat">: ENVENDSTATE}
+<ENVSTATE> TOKEN : {<SUBEQUATIONS: "subequations">: ENVENDSTATE}
+
+<ENVSTATE> TOKEN : {<ENVNAME: (["A"-"Z","a"-"z"])+ (["*"])*>: ENVENDSTATE}
+<ENVENDSTATE> TOKEN : {<ENVEND: "}"> : DEFAULT}
+TOKEN : {<END : "\\end" (" ")* "{" > : ENVSTATE}
+
+TOKEN : {<DIGIT0 : ["0"-"9"]> : NUM}
+<NUM> TOKEN : {<DIGIT1 : ["0"-"9",","]> {} : NUM}
+<NUM> SKIP : {<NODIGIT : ~["0"-"9",","]> {input_stream.backup(1);} : DEFAULT}
+
+TOKEN: {<PARAM: "#" (["0"-"9"])+>}
+TOKEN : {<ENGLISHLETTER : ["A"-"Z","a"-"z"]>}
+TOKEN : {<TEXTSYMBOL : "'" | "/" | ":" | ";" | "?" | "!" | "~" | "," |
+                       "=" | "+" | "-" | "*" | ">" | "<" | "@" | "\\@" |
+                       "--" | "---" | "\\ " | "\\," | "\\\n" | "\\quad" | 
+		       "\\qquad" | "\\#"  |"\\_" | "\\>" | "\\="  |"\\&" | "\\%" >}
+
+TOKEN : {<GREEKLETTER: ["Α"-"Ω" , "\u00b6", "α"-"ω", "«", "»", "ά", "έ", "ή", "ί", "ό", "ύ", "ώ",
+                        "ϊ", "ϋ", "Ά", "Έ", "Ή", "Ί", "Ό", "Ύ", "Ώ"]>}
+
+TOKEN : {<DIPHTHONG : "αι" | "αί" | "Αι" | "Αί" |
+  	                  "αυ" | "αύ" | "Αυ" | "Αύ" |
+                      "οι" | "οί" | "Οι" | "Οί" |
+                      "ου" | "ού" | "Ου" | "Ού" |
+                      "ει" | "εί" | "Ει" | "Εί" |
+                      "ευ" | "εύ" | "Ευ" | "Εύ" |
+                      "υι" | "υί" | "Υι" | "Υί" |
+                      "ηυ" | "ηύ" | "Ηυ" | "Ηύ" |
+"ΐ" |
+"ΰ" |
+"αὶ"|
+"αί"|
+"αἰ"|
+"αἱ"|
+"αἲ"|
+"αἳ"|
+"αἴ"|
+"αἵ"|
+"αἶ"|
+"αἷ"|
+"Αὶ"|
+"Αί"|
+"Αἰ"|
+"Αἱ"|
+"Αἲ"|
+"Αἳ"|
+"Αἴ"|
+"Αἵ"|
+"Αἶ"|
+"Αἷ"|
+"εὶ"|
+"εί"|
+"εἰ"|
+"εἱ"|
+"εἲ"|
+"εἳ"|
+"εἴ"|
+"εἵ"|
+"εἶ"|
+"εἷ"|
+"Εὶ"|
+"Εί"|
+"Εἰ"|
+"Εἱ"|
+"Εἲ"|
+"Εἳ"|
+"Εἴ"|
+"Εἵ"|
+"Εἶ"|
+"Εἷ"|
+"οὶ"|
+"οί"|
+"οἰ"|
+"οἱ"|
+"οἲ"|
+"οἳ"|
+"οἴ"|
+"οἵ"|
+"οἶ"|
+"οἷ"|
+"Οὶ"|
+"Οί"|
+"Οἰ"|
+"Οἱ"|
+"Οἲ"|
+
+"Οἳ"|
+"Οἴ"|
+"Οἵ"|
+"Οἶ"|
+"Οἷ"|
+"υὶ"|
+"υί"|
+"υἰ"|
+"υἱ"|
+"υἲ"|
+"υἳ"|
+"υἴ"|
+"υἵ"|
+"υἶ"|
+"υἷ"|
+"Υὶ"|
+"Υί"|
+"Υἰ"|
+"Υἱ"|
+"Υἲ"|
+"Υἳ"|
+"Υἴ"|
+"Υἵ"|
+"Υἶ"|
+"Υἷ"|
+"αὺ"|
+"αύ"|
+"αὐ"|
+"αὑ"|
+"αὒ"|
+"αὓ"|
+"αὔ"|
+"αὕ"|
+"αὖ"|
+"αὗ"|
+"Αὺ"|
+"Αύ"|
+"Αὐ"|
+"Αὑ"|
+"Αὒ"|
+"Αὓ"|
+"Αὔ"|
+"Αὕ"|
+"Αὖ"|
+"Αὗ"|
+"εὺ"|
+"εύ"|
+"εὐ"|
+"εὑ"|
+"εὒ"|
+"εὓ"|
+"εὔ"|
+"εὕ"|
+"εὖ"|
+"εὗ"|
+"Εὺ"|
+"Εύ"|
+"Εὐ"|
+"Εὑ"|
+
+"Εὒ"|
+"Εὓ"|
+"Εὔ"|
+"Εὕ"|
+"Εὖ"|
+"Εὗ"|
+"ηὺ"|
+"ηύ"|
+"ηὐ"|
+"ηὑ"|
+"ηὒ"|
+"ηὓ"|
+"ηὔ"|
+"ηὕ"|
+"ηὖ"|
+"ηὗ"|
+"Ηὺ"|
+"Ηύ"|
+"Ηὐ"|
+"Ηὑ"|
+"Ηὒ"|
+"Ηὓ"|
+"Ηὔ"|
+"Ηὕ"|
+"Ηὖ"|
+"Ηὗ"|
+"οὺ"|
+"ού"|
+"οὐ"|
+"οὑ"|
+"οὒ"|
+"οὓ"|
+"οὔ"|
+"οὕ"|
+"οὖ"|
+"οὗ"|
+"Οὺ"|
+"Ού"|
+"Οὐ"|
+"Οὑ"|
+"Οὒ"|
+"Οὓ"|
+"Οὔ"|
+"Οὕ"|
+"Οὖ"|
+"Οὗ"|
+"αι"|
+"αί"|
+"Αι"|
+"Αί"|
+"αυ"|
+"αύ"|
+"Αυ"|
+"Αύ"|
+"ει"|
+"εί"|
+"Ει"|
+"Εί"|
+"ευ"|
+
+"εύ"|
+"Ευ"|
+"Εύ"|
+"οι"|
+"οί"|
+"Οι"|
+"Οί"|
+"ου"|
+"ού"|
+"Ου"|
+"Ού"|
+"υι"|
+"υί"|
+"Υι"|
+"Υί"|
+"ηυ"|
+"ηύ"|
+"Ηυ"|
+"Ηύ"|
+
+
+"ὰ"|
+"ά"|
+"ἀ"|
+"ἁ"|
+"ἂ"|
+"ἃ"|
+"ἄ"|
+"ἅ"|
+"ἆ"|
+"ἇ"|
+"ᾶ"|
+
+"ᾳ"|
+"ᾲ"|
+"ᾴ"|
+"ᾀ"|
+"ᾁ"|
+"ᾂ"|
+"ᾃ"|
+"ᾄ"|
+"ᾅ"|
+"ᾆ"|
+"ᾇ"|
+"ᾷ"|
+
+"ὲ"|
+"έ"|
+"ἐ"|
+"ἑ"|
+"ἒ"|
+"ἓ"|
+"ἔ"|
+"ἕ"|
+
+
+"ὴ"|
+"ή"|
+"ἠ"|
+"ἡ"|
+"ἢ"|
+"ἣ"|
+"ἤ"|
+"ἥ"|
+"ἦ"|
+"ἧ"|
+"ῆ"|
+
+"ῃ"|
+"ῂ"|
+"ῄ"|
+"ᾐ"|
+"ᾑ"|
+"ᾒ"|
+"ᾓ"|
+"ᾔ"|
+"ᾕ"|
+"ᾖ"|
+"ᾗ"|
+"ῇ"|
+
+"ὶ"|
+"ί"|
+"ἰ"|
+"ἱ"|
+"ἲ"|
+"ἳ"|
+"ἴ"|
+"ἵ"|
+"ἶ"|
+"ἷ"|
+"ῖ"|
+
+"ὸ"|
+"ό"|
+"ὀ"|
+"ὁ"|
+"ὂ"|
+"ὃ"|
+"ὄ"|
+"ὅ"|
+
+"ὺ"|
+"ύ"|
+"ὐ"|
+"ὑ"|
+"ὒ"|
+"ὓ"|
+"ὔ"|
+"ὕ"|
+"ὖ"|
+"ὗ"|
+"ῦ"|
+
+"ὼ"|
+"ώ"|
+"ὠ"|
+"ὡ"|
+"ὢ"|
+"ὣ"|
+"ὤ"|
+"ὥ"|
+"ὦ"|
+"ὧ"|
+"ῶ"|
+
+"ῳ"|
+"ῲ"|
+"ῴ"|
+"ᾠ"|
+"ᾡ"|
+"ᾢ"|
+"ᾣ"|
+"ᾤ"|
+"ᾥ"|
+"ᾦ"|
+"ᾧ"|
+"ῷ"|
+
+"ῤ"|
+"ῥ"|
+"Ῥ"|
+
+"Ὰ"|
+"Ά"|
+"Ἀ"|
+"Ἁ"|
+"Ἂ"|
+"Ἃ"|
+"Ἄ"|
+"Ἅ"|
+"Ἆ"|
+"Ἇ"|
+" "|
+"ᾼ"|
+"ᾈ"|
+"ᾉ"|
+"ᾊ"|
+"ᾋ"|
+"ᾌ"|
+"ᾍ"|
+"ᾎ"|
+"ᾏ"|
+
+
+"Ὲ"|
+"Έ"|
+"Ἐ"|
+"Ἑ"|
+"Ἒ"|
+"Ἓ"|
+"Ἔ"|
+"Ἕ"|
+
+"Ὴ"|
+"Ή"|
+"Ἠ"|
+"Ἡ"|
+"Ἢ"|
+"Ἣ"|
+"Ἤ"|
+"Ἥ"|
+"Ἦ"|
+"Ἧ"|
+
+"ῌ"|
+"ᾘ"|
+"ᾙ"|
+"ᾚ"|
+"ᾛ"|
+"ᾜ"|
+"ᾝ"|
+"ᾞ"|
+"ᾟ"|
+
+
+"Ὶ"|
+"Ί"|
+"Ἰ"|
+"Ἱ"|
+"Ἲ"|
+"Ἳ"|
+"Ἴ"|
+"Ἵ"|
+"Ἶ"|
+"Ἷ"|
+" "|
+"Ὸ"|
+"Ό"|
+"Ὀ"|
+"Ὁ"|
+"Ὂ"|
+"Ὃ"|
+"Ὄ"|
+"Ὅ"|
+
+"Ὺ"|
+"Ύ"|
+"Ὑ"|
+"Ὓ"|
+"Ὕ"|
+"Ὗ"|
+
+
+"Ὼ"|
+"Ώ"|
+"Ὠ"|
+"Ὡ"|
+"Ὢ"|
+"Ὣ"|
+"Ὤ"|
+"Ὥ"|
+"Ὦ"|
+"Ὧ"|
+" "|
+
+"ῼ"|
+"ᾨ"|
+"ᾩ"|
+"ᾪ"|
+"ᾫ"|
+"ᾬ"|
+"ᾭ"|
+"ᾮ"|
+"ᾯ"|
+
+
+"᾽"|
+"ι"|
+"᾿"|
+"῀"|
+"῁"|
+"῍"|
+"῎"|
+"῏"|
+"῝"|
+"῞"|
+"῟"|
+"ῒ"|
+"ΐ"|
+"ῗ"|
+"ῢ"|
+"ΰ"|
+"ῧ"|
+"῭"|
+"΅"|
+"`"|
+"´"|
+"῾"|
+
+"ᾰ"|
+"ᾱ"|
+"Ᾰ"|
+"Ᾱ"|
+"ῐ"|
+"ῑ"|
+"Ῐ "|
+"Ῑ "|
+"ῠ"|
+"ῡ"|
+"Ῠ"|
+"Ῡ"|
+
+"αῖ"|
+"Αῖ"|
+"αῦ"|
+"Αῦ"|
+"εῖ"|
+"Εῖ"|
+"εῦ"|
+"Εῦ"|
+"οῖ"|
+"Οῖ"|
+"οῦ"|
+"Οῦ"|
+"υῖ"|
+"Υῖ"|
+"ηῦ"|
+"Ηῦ" >}
+
+TOKEN : {<ACCENT: "\\'">}
+TOKEN : {<GRAVEACCENT: "\\`">}
+
+TOKEN : {<INLINEMATH: "$">}
+
+TOKEN : {<INLINEMATHBEG: "\\(">}
+TOKEN : {<INLINEMATHEND: "\\)">}
+
+
+TOKEN : {<USEPACKAGE: "\\usepackage">}
+TOKEN : {<DOCUMENTCLASS: "\\documentclass">}
+TOKEN : {<NEWTHEOREM: "\\newtheorem">}
+
+// Label and ref should be commands...
+TOKEN : {<LABEL: "\\label">}
+TOKEN : {<REF: "\\ref" | "\\eqref">}
+TOKEN : {<INDEX: "\\index">}
+TOKEN : {<TEXTBF: "\\textbf">}
+TOKEN : {<TEXTIT: "\\textit" >}
+TOKEN : {<EMPH: "\\emph" >}
+TOKEN : {<TEXTCIRCLED: "\\textcircled" >}
+TOKEN : {<INPUT: "\\Input" | "\\input" >}
+TOKEN : {<INCLUDE: "\\include" >}
+TOKEN : {<NEWCOMMAND: "\\newcommand" >}
+
+TOKEN : {<DECLAREMATHOPERATOR: "\\DeclareMathOperator" >}
+TOKEN : {<DECLAREMATHOPERATORSTAR: "\\DeclareMathOperator*" >}
+
+TOKEN : {<OPERATORNAME: "\\operatorname" >}
+TOKEN : {<OPERATORNAMESTAR: "\\operatorname*" >}
+
+TOKEN : {<MOD: "\\mod" >}
+TOKEN : {<PMOD: "\\pmod" >}
+TOKEN : {<BMOD: "\\bmod" >}
+TOKEN : {<POD: "\\pod" >}
+
+TOKEN : {<HUGE: "\\huge" >}
+
+TOKEN : {<MATHBEGIN : "\\[" | "\\begin" (" ")* "{math}"| "\\begin" (" ")* "{equation}"| "\\begin" (" ")* "{equation*}" >}
+TOKEN : {<MATHEND : "\\]" | "\\end" (" ")* "{math}" | "\\end" (" ")* "{equation}"| "\\end" (" ")* "{equation*}">}
+TOKEN : {<MATHBEND : "$$" >}
+
+TOKEN : {<BEGINDOCUMENT: "\\begin" (" ")* "{document}" >}
+TOKEN : {<ENDDOCUMENT: "\\end" (" ")* "{document}" >}
+
+TOKEN : {<TEXTLATIN : "\\textlatin" >}
+TOKEN : {<ITEM : "\\item" >}
+TOKEN : {<CHAPTER: "\\chapter" >}
+TOKEN : {<SECTION: "\\section" >}
+TOKEN : {<SUBSECTION: "\\subsection" >}
+TOKEN : {<VERB: "\\verb" >}
+TOKEN : {<HLINE: "\\hline" > }
+TOKEN : {<MULTICOLUMN: "\\multicolumn" > }
+TOKEN : {<MULTIROW: "\\multirow" > }// not used...
+
+TOKEN : {<FRAC : "\\frac"| "\\dfrac" | "\\tfrac">}
+TOKEN : {<SQRT : "\\sqrt">}
+TOKEN : {<LEFT : "\\left" >}
+TOKEN : {<RIGHT: "\\right" >}
+TOKEN : {<TEXTRM: "\\textrm" |"\\mathrm"| "\\text">}
+TOKEN : {<INTERTEXT: "\\intertext" >}
+TOKEN : {<SHORTINTERTEXT: "\\shortintertext" >}
+
+TOKEN : {<HBOX: "\\hbox" >}
+TOKEN : {<MBOX: "\\mbox" >}
+TOKEN : {<TILDE: "\\tilde">}
+//TOKEN : {<WIDETILDE: "\\widetilde" >}
+
+TOKEN : { < LTNALLCAPS: "\\latextonemethallcaps" | "\\ltnallcaps" > }
+
+TOKEN : {<TEXTSC: "\\textsc" >}
+TOKEN : {<OVERLINE: "\\overline" >}
+TOKEN : {<UNDERLINE: "\\underline" >}
+TOKEN : {<DOT: "\\dot" >}
+TOKEN : {<LENQNO: "\\lenqno" >}
+TOKEN : {<HAT: "\\hat" >}
+TOKEN : {<WIDEHAT: "\\widehat" >}
+
+TOKEN : {<VEC: "\\vec" >}
+TOKEN : {<BAR: "\\bar" >}
+TOKEN : {<STACKREL: "\\stackrel" >}
+TOKEN : {<CHECK: "\\check" >}
+TOKEN : {<ACUTE: "\\acute" >}
+TOKEN : {<GRAVE: "\\grave" >}
+TOKEN : {<CASES: "\\cases" >}
+TOKEN : {<CR: "\\cr" >}
+TOKEN : {<CAPTION: "\\caption" >}
+TOKEN : {<BREVE: "\\breve" >}
+TOKEN : {<DDOT: "\\ddot" >}
+TOKEN : {<MATHRING: "\\mathring" >}
+
+
+//TOKEN : {<IT: "\\it" >}
+//TOKEN : {<RM: "\\rm" >} //ignored
+//TOKEN : {<SL: "\\sl" >} //ignored
+//TOKEN : {<BF: "\\bf" >}
+//TOKEN : {<EM: "\\em" >}
+//TOKEN : {<SC: "\\sc" >}
+
+
+TOKEN : {<BINOM: "\\binom" >}
+TOKEN : {<MATHBB: "\\mathbb"|"\\mathbf" | "\\mathfrak" | "\\boldsymbol" | "\\pbm">}
+TOKEN : {<MATHCAL: "\\mathcal" >}
+TOKEN : {<UNDERBRACE: "\\underbrace" >}
+TOKEN : {<OVERBRACE: "\\overbrace" >}
+TOKEN : {<HDOTSFOR: "\\hdotsfor" >}
+
+
+TOKEN : {<LIMITS: "\\limits">}
+TOKEN : {<NOLIMITS: "\\nolimits">}
+TOKEN : {<SIDESET: "\\sideset">}
+
+TOKEN : {<MATHSYMBOL: "\\ " | "\\quad"| "\\!"|"\\:"|"\\;">} 
+
+TOKEN : {<MATHTEXTSEPARATOR: "("|")" | "." | "|" | "\\{"| "\\}"|"\\|">}
+TOKEN : {<MATHSEPARATOR: "\\rangle" | "\\langle"| "\\llbracket" | "\\rrbracket">}
+TOKEN : { <DELIMITERSIZEMODIFIER:  "\\bigr" | "\\bigl" |"\\biggr" | "\\biggl" |
+                                   "\\Bigr" | "\\Bigl" |"\\Biggr" | "\\Biggl" | "\\big" | "\\bigg">}
+  
+TOKEN : {<SUP: "^">}
+TOKEN : {<SUB: "_">}
+TOKEN : {<LCB: "{">}
+TOKEN : {<RCB: "}">}
+
+TOKEN : {<OVERSET: "\\overset">}
+TOKEN : {<UNDERSET: "\\underset">}
+TOKEN : {<OVERUNDERSET: "\\overunderset">}
+
+//TOKEN : {<OVERLEFTARROW: "\\overleftarrow">}
+//TOKEN : {<OVERRIGHTARROW: "\\overrightarrow">}
+//TOKEN : {<UNDERLEFTARROW: "\\underleftarrow">}
+//TOKEN : {<UNDERRIGHTARROW: "\\underrightarrow">}
+//TOKEN : {<OVERLEFTRIGHTARROW: "\\overleftrightarrow">}
+//TOKEN : {<UNDERLEFTRIGHTARROW: "\\underleftrightarrow">}
+
+TOKEN: {<OVERBAR: "\\overbar">}
+TOKEN: {<OVHOOK: "\\ovhook">}
+TOKEN: {<OCIRC: "\\ocirc">}
+TOKEN: {<CANDRA: "\\candra">}
+TOKEN: {<OTURNEDCOMMA: "\\oturnedcomma">}
+TOKEN: {<OCOMMATOPRIGHT: "\\ocommatopright">}
+TOKEN: {<DROANG: "\\droang">}
+TOKEN: {<LEFTHARPOONACCENT: "\\leftharpoonaccent">}
+TOKEN: {<RIGHTHARPOONACCENT: "\\rightharpoonaccent">}
+TOKEN: {<VERTOVERLAY: "\\vertoverlay">}
+TOKEN: {<DDDOT: "\\dddot">}
+TOKEN: {<DDDDOT: "\\ddddot">}
+TOKEN: {<ANNUITY: "\\annuity">}
+TOKEN: {<WIDEBRIDGEABOVE: "\\widebridgeabove">}
+TOKEN: {<ASTERACCENT: "\\asteraccent">}
+TOKEN: {<NOTACCENT: "\\notaccent">}
+TOKEN: {<WIDETILDE: "\\widetilde">}
+TOKEN: {<WIDEOVERBAR: "\\wideoverbar">}
+TOKEN: {<WIDEBREVE: "\\widebreve">}
+TOKEN: {<WIDECHECK: "\\widecheck">}
+TOKEN: {<OVERLEFTHARPOON: "\\overleftharpoon">}
+TOKEN: {<OVERRIGHTHARPOON: "\\overrightharpoon">}
+TOKEN: {<OVERLEFTARROW: "\\overleftarrow">}
+TOKEN: {<OVERRIGHTARROW: "\\overrightarrow">}
+TOKEN: {<OVERLEFTRIGHTARROW: "\\overleftrightarrow">}
+TOKEN: {<THREEUNDERDOT: "\\threeunderdot">}
+TOKEN: {<MATHUNDERBAR: "\\mathunderbar">}
+TOKEN: {<WIDEUTILDE: "\\wideutilde">}
+TOKEN: {<UNDERLEFTRIGHTARROW: "\\underleftrightarrow">}
+TOKEN: {<UNDERRIGHTHARPOONDOWN: "\\underrightharpoondown">}
+TOKEN: {<UNDERLEFTHARPOONDOWN: "\\underleftharpoondown">}
+TOKEN: {<UNDERLEFTARROW: "\\underleftarrow">}
+TOKEN: {<UNDERRIGHTARROW: "\\underrightarrow">}
+TOKEN: {<LONGDIVISION: "\\longdivision">}
+TOKEN: {<OVERBRACKET: "\\overbracket">}
+TOKEN: {<OVERPAREN: "\\overparen">}
+TOKEN: {<UNDERBRACKET: "\\underbracket">}
+TOKEN: {<UNDERPAREN: "\\underparen">}
+
+TOKEN: {<XLEFTARROW: "\\xleftarrow">}
+TOKEN: {<XRIGHTARROW: "\\xrightarrow">}
+
+
+TOKEN: {<BOXED: "\\boxed">}
+TOKEN: {<SMASH: "\\smash">}
+TOKEN: {<UPROOT: "\\uproot">}
+TOKEN: {<LEFTROOT: "\\leftroot">}
+TOKEN: {<DISPLAYBREAK: "\\displaybreak">}
+TOKEN: {<NUMBERWITHIN: "\\numberwithin">}
+TOKEN: {<ALLOWDISPLAYBREAKS: "\\allowdisplaybreaks">}
+TOKEN: {<RAISETAG: "\\raisetag">}
+
+TOKEN: {<CUBEROOT: "\\cuberoot">}
+TOKEN: {<FORTHROOT: "\\forthroot">}
+
+
+TOKEN : {<SUBSTACK: "\\substack">}
+
+
+TOKEN : {<CFRAC: "\\cfrac">}
+
+TOKEN : {<LBRA: "[">}
+TOKEN : {<RBRA: "]">}
+TOKEN : {<AMPERSAND: "&">}
+
+TOKEN : {<NEWLINE: "\\\\" | "\\newline"| "\\newpage">}
+
+/* Standard functions, sin, cos, etc */
+//TOKEN : {<BASICFUNCTION: "\\sin" | "\\cos">}
+  
+TOKEN : {<COMMAND : "\\" ("$" |(["A"-"Z","a"-"z","@"])+("*")?)>}
+
+TOKEN: {<ANY: ~[] >}
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////// SYNTACTICAL //////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+Token mathDelimiter():
+{
+    Token t;
+}
+{
+    (t = <MATHTEXTSEPARATOR> | t = <MATHSEPARATOR> | t = <LBRA> | t = <RBRA>) { return t; }
+}
+
+// It sucks but it works...
+Token mathDelimiter_no_brackets():
+{
+    Token t;
+}
+{
+    (t = <MATHTEXTSEPARATOR> | t = <MATHSEPARATOR>) { return t; }
+}
+
+Token myDigit():
+{
+	Token t;
+}
+{
+    (t = <DIGIT0> | t = <DIGIT1>) { return t; }
+}
+
+Token latincharacter():
+{
+    Token t = null;
+}
+{
+	(
+        t = <ENGLISHLETTER> | t = <TEXTSYMBOL> | t = <MATHTEXTSEPARATOR> | t = myDigit() //TODO: Fix (don't forget the spaces).
+	)
+	{ return t; }
+}
+
+String brackets() :
+{
+    Token t = null;
+}
+{
+    (t = <LBRA> | t = <RBRA>) { return getLetterCode(t.image); }
+}
+
+String character() :
+{
+	Token t = null;
+	String s;
+	boolean space;
+}
+{
+	(t = <ANY> | t = latincharacter() | t = <GREEKLETTER> | t = <DIPHTHONG>)
+	{
+        String key = t.image;
+        String code = getLetterCode(key);
+        space = checkforPreviousSpace(t);
+        // System.out.print(key);
+        if (t.kind == DIGIT0) {
+            code = getMathCode("NUMBER-SYMBOL") + code;
+        }
+        if (space) {
+            return " " + code;
+        }
+        return code;
+	}
+}
+
+String character_no_braille() :
+{
+	Token t = null;
+	String s;
+	boolean space;
+}
+{
+    (t = latincharacter() | t = <GREEKLETTER> | t = <DIPHTHONG> | t = <SUB>)
+	{
+        String key = t.image;
+        space = checkforPreviousSpace(t);
+        // System.out.print(key);
+	    if (space) {
+	        return " " + key;
+        }
+	    return key;
+	}
+}
+
+String bracketcontent() :
+{
+    Token t;
+    String s = "", result;
+    boolean space = false;
+}
+{
+    t = <LCB> { space = checkforPreviousSpace(t); }
+    /*[LOOKAHEAD(1) <COMMAND>]*/
+    // s = basic()
+	s = content() // ??
+    <RCB>
+	{
+        if (space) {
+            result = " " + s;
+        } else {
+            result = s;
+        }
+        return result;
+   }
+}
+
+String textlatin() :
+{
+	Token t;
+	String s = "", result;
+	boolean space = false;
+}
+{
+	(
+        t = <TEXTLATIN> { space = checkforPreviousSpace(t); }
+	 	s = command_parameter()
+	 	{
+            String en = getLetterCode("EN");
+            s = s.replaceAll("^", en);
+            s = s.replaceAll(" ", " " + en);
+	    }
+	    /*
+	    1. Get number of parameters, n, from a symbol table.
+        2. Get the parameters in the following fashion:
+            for (int param = 0; param < n; param++) {
+                command_parameter();
+            }
+		3. That's all! In this way we can define new commands with a \newcommand command. We just update the symbol table.
+		*/
+        // [LOOKAHEAD (1) s = command_parameter()] // zero or one parameters. FIX!
+	)
+    {
+        // insert an english text symbol in the beginning and after every space...
+        if (space) {
+            result = " " + s;
+        } else {
+            result = s;
+        }
+        return result;
+    }
+}
+
+
+String param() :
+{
+	Token t;
+	int nParam;
+}
+{
+	t = <PARAM> {
+		nParam = Integer.parseInt(t.image.substring(1));
+		String parameter = this.currentMacro.params[nParam-1];
+		return parameter;
+	}	
+}
+ 
+// This sucks! Every command actually MUST know its number of parameters.
+String textcommand() :
+{
+	Token t;
+	String s = "", result;
+	boolean space = false;
+	Command cmd;
+}
+{
+    (
+        (
+            t = <COMMAND> { space = checkforPreviousSpace(t); }
+	        {	
+			cmd = commandTable.get(t.image); // TODO: Is this right;	
+                	if (cmd != null) {
+				InputStream targetStream=null;
+				try{
+					targetStream = new ByteArrayInputStream(cmd.body.getBytes("ISO-8859-7"));
+				}catch(Exception e){e.printStackTrace();}
+				
+
+				for (int i=0; i< cmd.numOfParams;i++){
+					cmd.params[i] = command_parameter();// This is the real	
+				}
+				Latex lparser = new Latex(table, new InputStreamReader(targetStream), cmd, commandTable, verbose);
+
+				s = lparser.content();
+				
+		//		String body = cmd.body;
+
+                	} 
+		else {// Not a defined command. Check if it is just in the list of symbols. 
+				s = getLetterCode(t.image);
+			}	                	
+		}         	 
+                	
+	        /*
+	        1. Get number of parameters, n, from a symbol table.
+            2. Get the parameters in the following fashion:
+		        for (int param = 0; param < n; param++) {
+                    command_parameter();
+                }
+		    3. That's all! In this way we can define new commands with a \newcommand command.
+		       We just update the symbol table.
+		    */
+            // [LOOKAHEAD (1) s = command_parameter()] // zero or one parameters. FIX!
+	    )
+	    | s = textlatin() | s = index() | s = label() | s = ref() | s = accent() | s = grave() | s = chapter()
+	    | s = section() | s = subsection() | s = textbf() | s = textit() | s = latextonemethallcaps() 
+	    | s = verb() |input() | newcommand() | textcircled() |s=param()| declaremathoperator()| ignore()
+    )
+	{	
+        if (space) {
+            result = " " + s;
+        } else {
+            result = s;
+        }
+        return result;
+    }
+}
+
+void newcommand() :
+{
+    String newcommand, definition;
+    Token commandToken;
+	Token nParamToken=null;
+	StringBuffer def = new StringBuffer();
+	char c;
+	int n=1;
+	int nParams=0;
+	Command cmd;
+	MathCommand mcmd;
+	String strNum;
+}
+{
+	<NEWCOMMAND> <LCB> commandToken = <COMMAND><RCB>[LOOKAHEAD(1) <LBRA> nParamToken=myDigit() <RBRA>]  <LCB> {// SOS: (Optional) parameters
+		char pc = ' ';
+		while(true){	
+			try {
+                c = jj_input_stream.readChar(); 
+            } catch(java.io.IOException ioe) {
+                System.out.println("End of file while reading command definition..");
+                return;
+            }
+			if (n == 1 && c == '}') break;
+			else if (c=='}' && pc != '\\') n--;
+			else if (c=='{' && pc != '\\') n++;
+			def.append(c);
+			pc = c;
+		}
+
+		if (!commandToken.toString().equals("\\latextonemethnewline")) { 
+			if (nParamToken!=null){
+				strNum = nParamToken.image;
+			 	nParams= Integer.parseInt(strNum);
+			}
+			definition=def.toString();
+			if (nParams==0){
+				cmd = new Command(commandToken.image,definition);
+				mcmd = new MathCommand(commandToken.image,definition);
+			}
+			else {
+				cmd = new Command(commandToken.image, nParams, definition);  
+			mcmd = new MathCommand(commandToken.image,nParams,definition);
+			} 	
+			commandTable.put(commandToken.image, cmd);
+			commandMathTable.put(commandToken.image, mcmd); //SOS: This is wrong... We put the commands in both tables
+		}
+	}
+}
+
+void newtheorem() :
+{
+	StringBuffer name = new StringBuffer(),
+	            label = new StringBuffer(),
+	            opts = new StringBuffer(),
+	            counterLabel = new StringBuffer();
+	Token t;
+	Theorem theorem = null, counterTheorem = null;
+}
+{
+    // \newtheorem{theorem}{Θεώρημα}[section]
+    <NEWTHEOREM> <LCB> ( t = latincharacter() { name.append(t.image); })+ <RCB>
+    (
+        (
+            <LCB>
+   	        (
+   	            (t = <ENGLISHLETTER> | t = <GREEKLETTER> | t = <DIPHTHONG> | t = myDigit())
+   	            {label.append(t.image);}
+            )*
+   	        <RCB> [ <LBRA> (<ENGLISHLETTER> | myDigit())+ <RBRA> ] //Ignore options, section by default
+   	    )
+   	    {
+   	        theorem = new Theorem(name.toString(), label.toString());
+        }
+   	    |
+   	    (
+            <LBRA>
+            (
+                (t = <ENGLISHLETTER> | t = myDigit()) { counterLabel.append(t.image); }
+            )+
+            <RBRA> <LCB>
+            (
+                (t = <ENGLISHLETTER> | t = <GREEKLETTER> | t = <DIPHTHONG> | t = myDigit())
+   	    	    { label.append(t.image); }
+            )+ <RCB>
+   	    )
+   	    {
+   	      counterTheorem = theorems.get(counterLabel.toString());
+   	      theorem = new Theorem(name.toString(), label.toString(), counterTheorem);
+   	    }
+    )
+	{
+        // System.out.println("Registering theorem '" + name.toString() +"' " + label.toString());
+		theorems.put(name.toString(),theorem);	  
+	}
+}
+
+String theoremenvironment(String theoremName) :
+{
+  	String content = "";
+  	Token nameToken;
+  	Theorem theorem = null;
+  	String option = "", label = "";
+}
+{
+	[ LOOKAHEAD(1) <LBRA> option = option() <RBRA> ] [ LOOKAHEAD(1) label = label() ]
+	{
+	  	theorem = theorems.get(theoremName);
+	    if (theorem == null) {
+		System.out.println("Error in line " + jj_input_stream.getEndLine());
+		System.out.println("Environment '" + theoremName + "' " + " not defined");
+		// throw new ParseException();
+	    }
+    }
+    content=content()
+	<END> <ENVNAME> <ENVEND> 
+	{	
+	    String lpar = getLetterCode("(");
+	    String rpar = getLetterCode(")");
+		String optionallabel = "";
+		if (!option.equals("")) {
+			optionallabel = lpar  + option + rpar;
+	    }
+        String theoremlabel = "";
+        if (theorem != null) {
+            theoremlabel = string2Braille(theorem.getLabel());
+
+            if (label.equals("")) {
+                StringBuffer theoremNumber = new StringBuffer();
+                theoremNumber.append(getLetterCode("NUMBER-SYMBOL"));
+
+                if (chapter !=0) {
+                    theoremNumber.append(string2Braille(Integer.toString(chapter)));
+                    theoremNumber.append(getTheoremCode("."));
+                }
+
+                theoremNumber.append(string2BrailleTheorem(Integer.toString(section)));
+                theoremNumber.append(getTheoremCode("."));
+                theoremNumber.append(string2BrailleTheorem(Integer.toString(theorem.getNextCounter())));
+                label = theoremNumber.toString();
+            }
+        }
+        return /*"   " + */ theoremlabel  + optionallabel + " " + label + " " + content;
+	}
+}
+
+
+String command_parameter() :
+{
+	String s = "";
+}
+{
+	(s = character() | s = bracketcontent())
+	{ return s; }
+}
+
+String optioncontent() :
+{
+	String s = "";
+}
+{
+  (s = character() | s = inlinemath() | s = textcommand() | s = bracketcontent())
+  { return s; }
+}
+
+String option() :
+{
+	StringBuffer result = new StringBuffer();
+	String s;
+}
+{
+	s = optioncontent() { result.append(s); }
+	(LOOKAHEAD(1) s = optioncontent() { result.append(s); })*
+	{ return result.toString(); }
+}
+
+//Here, content means character or other basic staff.
+String basiccontent() :
+{
+	String s = "";
+}
+{
+  (s = optioncontent() | s = brackets())
+  { return s; }
+}
+
+String basic() :
+{
+	StringBuffer result = new StringBuffer();
+	String s;
+}
+{
+	s = basiccontent() { result.append(s); }
+	(LOOKAHEAD(1) s = basiccontent() { result.append(s); })*
+	{ return result.toString(); }
+}
+
+String content() :
+{
+    String s = null;
+    StringBuffer buffer = new StringBuffer();
+}
+{
+    (
+        s = basic() {buffer.append(s); }
+        | s = environment() { buffer.append(s); }
+        | s = newline() { buffer.append(s); }
+    )*
+    { return buffer.toString(); }
+}
+
+//Same as the above but with output.
+void topcontent() :
+{
+  	String content = "";
+}
+{
+    (
+        (
+            content = basic()
+            {
+                try {
+                    output.append(content);
+                } catch (Exception e) {
+	                e.printStackTrace();
+                }
+            }
+            |
+            content = environment()
+            {
+                try {
+                    output.append(content);
+                } catch (Exception e) {
+	                e.printStackTrace();
+                }
+            }
+            |
+            content = newline()
+            {
+                try {
+                    output.append(content);
+                } catch (Exception e) {
+	                e.printStackTrace();
+                }
+            }
+        )
+    )*
+}
+
+String  newline() :
+{
+    String s;
+}
+{
+    ((<TWONEWLINES> (LOOKAHEAD(1) <TWONEWLINES>)*) | <NEWLINE>)
+    {
+        // System.out.print("\\n");
+	    return "   "; // Instead of return "\\n   ";
+    }
+}
+
+void preamble() :
+{}
+{
+   (< TWONEWLINES >)* <DOCUMENTCLASS>
+    [LOOKAHEAD(1) <LBRA> (<ENGLISHLETTER> | <TEXTSYMBOL> | myDigit())* <RBRA>]
+    <LCB> (latincharacter())+ <RCB>
+    (
+        <USEPACKAGE> [<LBRA> (<ENGLISHLETTER> | <TEXTSYMBOL> | myDigit())* <RBRA>] <LCB> (latincharacter())+ <RCB>
+  	    | newtheorem()
+  	    | <TWONEWLINES>
+  	    | textcommand()
+ 	)*
+	// Everything in the preamble is ignored (except from the theorem/command/operator definitions... To be implemented)
+}
+
+// I don't think it is useful. Just consume this.
+void latex() :
+{}
+{
+    preamble()
+    // And other preamble stuff.
+    < BEGINDOCUMENT > topcontent() <ENDDOCUMENT>
+}
+
+String environment() :
+{
+    String result;
+}
+{
+       (
+			result = textenvironment() |
+			result = mathenvironment()
+//
+//          LOOKAHEAD(2) result = enumerate() |
+//         LOOKAHEAD(2)result = itemize() |
+//        LOOKAHEAD(2) result = description() |
+//	    LOOKAHEAD(2) result = mathenvironment() |
+//	     LOOKAHEAD(2)result = figure() |
+//	    LOOKAHEAD(2) result = center() |
+//	   LOOKAHEAD(2)  result = quote() |
+//	   LOOKAHEAD(2)  result = theoremenvironment() |
+//	   LOOKAHEAD(2)  result = proof() |
+//	    LOOKAHEAD(2) result = pspicture()|
+//	    LOOKAHEAD(2) result = verbatim()|
+//	    LOOKAHEAD(2) result = tabular()|
+//	     result = tabbing()
+    )
+    { return result; }
+}
+
+String textenvironment():
+{
+ 	String result = "";
+	Token nameToken = null;
+	String tokenName;
+}
+{
+   
+	<BEG> nameToken = <ENVNAME> <ENVEND>
+  	{
+  	  	tokenName = nameToken.image;
+
+		switch(tokenName) {
+			case "enumerate" :
+				result = enumerate();
+				break;
+			case "itemize" :
+				result = itemize();
+				break;
+			case "description" :
+				result = description();
+				break;
+			case "figure" :
+				result = figure();
+				break;
+			case "center" :
+				result = center();
+				break;
+			case "quote" :
+				result = quote();
+				break;
+			case "proof" :
+				result = proof();
+				break;
+			case "pspicture" :
+				result = pspicture(); 
+				break;
+			case "verbatim" :
+				result = verbatim();
+				break;
+			case "tabular" :
+				result = tabular();
+				break;
+			case "tabbing" :
+				result = tabbing();
+				break;	
+			default:
+				result = theoremenvironment(tokenName);
+				break;
+
+		}
+		return result;
+	}
+}
+
+String proof() :
+{
+    String content = "", optional = "", theorem = "";
+}
+{
+    
+    // By convention, label is the first command!! It should be optional!!
+    content = content()
+    <END> <ENVNAME> <ENVEND> 
+	{
+        String q = getLetterCode("\\textit-open") + string2Braille("Αποδειξη") + getLetterCode("\\textit-close");
+	    return q + content + getMathCode("\\Box") + " ";
+    }
+}
+
+String pspicture() :
+{
+    Token t;
+    String s = "";
+    StringBuilder buf = new StringBuilder("");
+}
+{
+     (
+         ( 
+            t = mathcharacter() { buf.append(t.image); }
+            | t = <COMMAND>     { buf.append(t.image); }
+            | t = <LCB>         { buf.append(t.image); }
+            | t = <RCB>         { buf.append(t.image); }
+            | t = <SUP>         { buf.append(t.image); }
+            | t = <SUB>         { buf.append(t.image); }
+            | t = <NEWLINE>     { buf.append("\\n"); }
+            | t = <TWONEWLINES> { buf.append("\\n\\n"); }
+            )+
+        | s = inlinemath() { buf.append(s); }
+    )+ { s = buf.toString(); }
+   <END> <ENVNAME> <ENVEND> 
+	{
+	    String result = "\\begin{pspicture}" + s + "\\end{pspicture}";
+
+	    String pictstring = preamble.getStart() + result + preamble.getEnd();
+		if (!inFigure) { 
+	    	picture++;
+	    	DataDumper.writePicture(picture, pictstring);
+	    	return "";
+	  	}
+	  	return result;
+    }
+}
+
+String quote() :
+{
+    String content = "", optional = "", theorem = "";
+}
+{
+      /*[LOOKAHEAD(1) <LBRA>  optional = option() <RBRA>] */
+    // By convention, label is the first command!! It should be optional!!
+    content = content()
+	<END> <ENVNAME> <ENVEND> 
+	{
+        String q = getLetterCode("'");
+        return q + content + q;
+    }
+}
+
+String figure() :
+{
+    String label = null, caption = null, s="";
+    String content = "";
+}
+{
+	
+	{ inFigure = true; }
+    [LOOKAHEAD(1) <LBRA> option() <RBRA>]
+    
+    content = textenvironment()
+  	[caption = caption() [ label = label()]] {
+  	picture++;
+  		if (caption != null) { 
+			if (null == label) {
+				System.out.println("Put label after caption on line " + jj_input_stream.getEndLine());
+				s = caption;
+			}
+			else {
+  	    		s = string2Braille("Σχήμα ") + label + string2Braille(":") + " " + caption +"\n";
+			}
+		}
+		
+		String result = content + s;
+
+	    String pictstring = preamble.getStart() + result + preamble.getEnd();
+		DataDumper.writePicture(picture, pictstring);
+		inFigure = false;
+  	 }
+    <END> <ENVNAME> <ENVEND> 
+	{ return  s; }
+}
+
+String caption():
+{
+	String caption, label="";
+}
+{
+  	< CAPTION > caption = command_parameter() {
+  	  
+  	  return caption;
+  	 }
+}
+
+String center() :
+{
+    String content = "", theorem = "";
+}
+{
+    
+    // By convention, label is the first command!! It should be optional!!
+    content = content() <END> <ENVNAME> <ENVEND> 
+    { return content; }
+}
+
+String item() :
+{
+    String option = "";
+    StringBuffer buffer = new StringBuffer();
+}
+{
+    <ITEM>
+    [LOOKAHEAD(1) <LBRA> option = option() <RBRA> { buffer.append(option); }]
+    { return buffer.toString(); }
+}
+ 
+String enumerate() :
+{
+    int counter = 1;
+    StringBuffer buffer = new StringBuffer();
+    String itemString, contentString;
+}
+{
+    { enumeratedepth++; }
+    (
+        itemString = item()
+        {
+		    buffer.append("\n");
+	        if (itemString.equals("")) {
+		        if (enumeratedepth == 2) {
+	  		        buffer.append(string2Braille(IntegerConversion.integerToGreek(counter++)));
+                    buffer.append(getLetterCode("."));
+                } else if (enumeratedepth == 3) {
+		            buffer.append(string2Braille(IntegerConversion.integerToRomanNumeral(counter++)));
+	  		        buffer.append(getLetterCode("."));
+		        } else { // enumeratedepth = 1 or 4, 5, 6, ...
+		  	        buffer.append(getLetterCode("NUMBER-SYMBOL"));
+	  		        buffer.append(string2Braille(Integer.toString(counter++)));
+	  		        buffer.append(getLetterCode("."));
+	 	        }
+	        } else {
+	  	        buffer.append(itemString );
+	        }
+		    buffer.append(getLetterCode(" "));
+	    }
+		contentString = content()
+	    {
+		    buffer.append(contentString);
+	        // System.out.print("\\n");
+	    }
+	)*
+	<END> <ENVNAME> <ENVEND>  { enumeratedepth--; }
+	{ return buffer.toString()+ "\n   "; }
+}
+
+String itemize() :
+{
+    StringBuffer buffer = new StringBuffer();
+    String itemString, contentString;
+}
+{
+   
+    (
+        itemString = item()
+        {
+            buffer.append("\n");
+            if (itemString.equals("")) {
+                buffer.append(getMathCode("\\bullet"));
+            }
+	        buffer.append(itemString );
+	    }
+		contentString = content()
+	    {
+            buffer.append(contentString);
+            // System.out.print("\\n");
+	    }
+	)*
+   <END> <ENVNAME> <ENVEND> 
+    { return buffer.toString() + "\n   "; }
+}
+
+
+String verb() :
+{
+	StringBuffer buf = new StringBuffer();
+	char ch, beg;
+	boolean isNumber = false;
+}
+{
+	<VERB>{
+		try {beg = jj_input_stream.readChar();}
+		catch(java.io.IOException ioe)
+		    {System.out.println("End of file while reading verb..."); return "";}
+
+		if (beg!='|' && beg!='+') {
+			System.out.println("Parse Error in verb:");
+
+			return "";
+		}
+
+		try {ch = jj_input_stream.readChar();}
+				catch(java.io.IOException ioe)
+			    	{System.out.println("End of file while reading verb..."); return "";}
+		buf.append(" ");
+		while (ch !=beg) {	
+
+			String op = null;
+				
+			if (Character.isDigit(ch) && !isNumber){
+		      		buf.append("⠼");
+			      isNumber = true;
+			}
+			else if (isNumber && !Character.isDigit(ch) && ch !=',' && ch !='.'){
+			     isNumber = false;
+			}	
+			
+			if (ch == '+')
+			   op = "⠬";
+			else if (ch == '@')
+			   op = "⠈⠁⠞";
+			else op = getLetterCode(Character.toString(ch));
+			buf.append(op);
+			
+// Tests for end of line not included...
+			try {ch = jj_input_stream.readChar();}
+				catch(java.io.IOException ioe)
+			    	{System.out.println("End of file while reading verb..."); return "";}
+		} 	
+	
+		buf.append(" ");
+
+	 //   jj_input_stream.backup(1);
+		return buf.toString();
+	}
+}
+
+String verbatim() :
+{
+    char ch;
+    int pos;
+    char[] beg1 = {'\\','e','n','d','{','v','e','r','b','a','t','i','m','}'};
+    StringBuffer buf = new StringBuffer();
+    boolean isNumber=false;
+}
+{
+    {
+	pos = 0;
+	
+	
+	/*
+   int error_line = input_stream.getEndLine();
+     int error_column = input_stream.getEndColumn();
+     String error_after = null;
+     boolean EOFSeen = false;
+     try { input_stream.readChar(); input_stream.backup(1); }
+     catch (java.io.IOException e1) {
+        EOFSeen = true;
+        error_after = curPos <= 1 ? "" : input_stream.GetImage();
+        if (curChar == '\n' || curChar == '\r') {
+           error_line++;
+           error_column = 0;
+        }
+        else
+           error_column++;
+     }
+     if (!EOFSeen) {
+        input_stream.backup(1);
+        error_after = curPos <= 1 ? "" : input_stream.GetImage();
+     }
+     throw new TokenMgrError(EOFSeen, curLexState, error_line, error_column, error_after, curChar, TokenMgrError.LEXICAL_ERROR);
+	*/
+	pos = 0;	
+	ch = 'a';//
+	buf.append("\n");	
+	outer: while(true) {
+	       	try {ch = jj_input_stream.readChar();}
+		catch(java.io.IOException ioe)
+		    {System.out.println("End of file while reading verbatim..."); return "";}
+		if (beg1.length == pos){ //    we found it
+			break outer;
+		}
+		else if (ch == beg1[pos]){
+			pos++; 
+		}
+		else {
+			//jj_input_stream.backup(pos); //
+			for (int i=0; i < pos; i++) {			
+				// translate character
+			
+				buf.append(getLetterCode(Character.toString(beg1[i])));
+//				System.out.print(Character.toString(beg1[i]));
+			}
+//			System.out.print(ch);
+
+			String op = null;
+				
+			if (Character.isDigit(ch) && !isNumber){
+		      		buf.append("⠼");
+			      isNumber = true;
+			}
+			else if (isNumber && !Character.isDigit(ch) && ch !=',' && ch !='.'){
+			     isNumber = false;
+			}	
+			
+			if (ch == '+')
+			   op = "⠬";
+			else if (ch == '@')
+			   op = "⠈⠁⠞";
+			else op = getLetterCode(Character.toString(ch));
+			buf.append(op);
+			pos = 0; // There is a more efficient algorithm, KMP but ... whatever...
+		}
+		
+	}
+	buf.append("\n");
+    jj_input_stream.backup(1);
+    return buf.toString();
+    }
+}
+
+String tabular() :
+{
+    StringBuffer buf = new StringBuffer();
+    String row;
+	tabularcolumn = 1;
+}
+{
+     <LCB> ((<ENGLISHLETTER> | < MATHTEXTSEPARATOR >))* <RCB>//TODO: needs modification.
+     { buf.append("\n\n"); }
+      (< HLINE >)*
+      row = tabularrow() { buf.append(row); }
+
+    (<NEWLINE> { buf.append("\n\n");}(< HLINE >)* row = tabularrow() { buf.append(row); })*
+   <END> <ENVNAME > <ENVEND>
+    { return buf.toString(); }
+}
+
+String tabularrow() :
+{
+  	StringBuffer buf = new StringBuffer();
+  	tabularcolumn = 1;
+  	String cell="";
+}
+{
+
+    [ LOOKAHEAD(2) ( cell = basic() {
+    	buf.append("⠿⠼" + string2Braille(Integer.toString(tabularcolumn))+"⠻");buf.append(cell); }
+    	|
+    		cell = multicol() { buf.append(cell); })] 
+    ( (<AMPERSAND> { tabularcolumn++; }
+    	[cell = basic() 	{buf.append("⠿⠼" + string2Braille(Integer.toString(tabularcolumn))+"⠻");buf.append(cell); }]
+    	 |
+    	 cell = multicol() { buf.append(cell); }) )*
+	{ return buf.toString(); }
+}
+
+String multicol() :
+{
+  	StringBuffer buf = new StringBuffer();
+  	int cols = 0;
+  	String cell;
+  	String num;  	
+}
+{
+    <MULTICOLUMN> <LCB > num = character_no_braille() { cols = Integer.parseInt(num);}< RCB >
+    	command_parameter()
+    	cell = command_parameter() 
+    	{ 
+    		buf.append("⠿⠼" +
+    			string2Braille(Integer.toString(tabularcolumn) +
+    				"-"+
+    				Integer.toString(tabularcolumn+cols-1)));
+    		buf.append("⠻");
+    		tabularcolumn += cols-1;
+    		buf.append(cell);
+    		return buf.toString(); }
+}
+
+String tabbing() :
+{
+    StringBuffer buf = new StringBuffer();
+    String line;
+}
+{
+    { buf.append("\n\n"); }
+    [ < NEWLINE > { buf.append("\n"); }]
+	line = basic(){ buf.append(line); }
+      (LOOKAHEAD (2)
+         < NEWLINE > { buf.append("\n"); } line=basic() { buf.append(line); }
+     )*
+       [ < NEWLINE > { buf.append("\n"); } ]
+     
+   	<END> <ENVNAME > <ENVEND> { buf.append("\n\n"); }
+    { return buf.toString(); }
+}
+
+String description() :
+{
+    StringBuffer buffer = new StringBuffer();
+    String itemString, contentString;
+}
+{
+    
+	(
+	    itemString = item()
+	    {
+		    buffer.append("\n");
+            buffer.append(itemString );
+            buffer.append(getLetterCode("."));
+            buffer.append(" ");
+	    }
+		contentString = content()
+	    {
+            buffer.append(contentString);
+	    }
+	)*
+    <END> <ENVNAME > <ENVEND>
+    { return buffer.toString()+ "\n   "; }
+}
+
+String mathenvironment() :
+{
+    String result = "";
+}
+{
+    (
+        (
+            (< MATHBEGIN > |< MATHBEND >) 
+		    result = math()
+            ( < MATHEND > |< MATHBEND >)
+        )
+        |
+        result = eqnarray_align()
+    )
+	{ return "\n" + result + "\n"; }
+}
+
+String inlinemath() :
+{
+    Token t;
+    String s = "";
+    boolean space;
+}
+{
+    ( t = <INLINEMATH> | t = < INLINEMATHBEG >){ space = checkforPreviousSpace(t); }
+    s = math()
+    ( <INLINEMATH> | < INLINEMATHEND >)
+    {
+        if (space) {
+            return " " + s;
+        }
+        return s;
+    }
+}
+
+String index() :
+{
+    Token t;
+    String s = "";
+    boolean space;
+}
+{
+    t = <INDEX> { space = checkforPreviousSpace(t); }
+	command_parameter()// ignore both parameters...
+	command_parameter()
+    {
+        if (space) {
+            return " " + s;
+        }
+        return s;
+    }
+}
+
+
+
+Expression mathlabel():
+{
+	String txtLabel;
+	Expression lbl = null;
+}
+{
+	txtLabel = label()
+	{
+		SimpleExpression sp = new SimpleExpression(" ", table);
+		SimpleExpression left = new SimpleExpression("(", table);
+		SimpleExpression right = new SimpleExpression(")", table);
+	  	lbl = new MathLabelExpression(txtLabel, table);
+	  	MathExpression me = new MathExpression(table);
+	  	me.addChild(sp);
+	  	me.addChild(left);
+	  	me.addChild(lbl);
+	  	me.addChild(right);
+	  	return me;
+	}  
+}
+
+
+ // Are you sure that label does this??
+String label() :
+{
+    Token t;
+    String s = "";
+    boolean space;
+    StringBuffer buffer = new StringBuffer();
+}
+{
+    t = <LABEL> { space = checkforPreviousSpace(t); }
+	(
+        s = character_no_braille() |
+        <LCB> (s = character_no_braille() { buffer.append(s); })+ { s = buffer.toString(); } <RCB>
+    )
+    {
+        // System.out.println("\nLABEL: " + s);
+        String label = labeltable.get(s);
+        // System.out.print( " " + label + " ");
+        if (label != null) {
+		    label = getMathCode("NUMBER-SYMBOL")+string2BrailleTheorem(label);
+        } else {
+	        label = getLetterCode("?");
+	  	} // In case code is not found...
+	    if (space) {
+    	    return " " + label;
+        }
+        return label;
+    }
+}
+
+String ref() :
+{
+    Token t;
+    String s = "";
+    boolean space;
+    StringBuffer buffer = new StringBuffer();
+}
+{
+    t = <REF> { space = checkforPreviousSpace(t); }
+    (
+        s = character_no_braille() |
+	    <LCB> (s = character_no_braille() { buffer.append(s); })+ { s = buffer.toString(); } <RCB>
+    )
+    {
+	    // System.out.println("\nLABEL: " + s);
+	    String label = labeltable.get(s);
+	    if (label != null) {
+		    label = string2BrailleTheorem(label);
+        } else {
+		    label = getLetterCode("?");
+        }
+	    if (space) {
+    	    return " " + getMathCode("NUMBER-SYMBOL") + label;
+        }
+    
+	    if (t.image.equals("\\eqref")) {
+		    label = getLetterCode("(") + label + getLetterCode(")");
+        }
+	    return label;
+    }
+}
+
+String textbf() :
+{
+    Token t;
+    boolean space;
+    String s = null;
+}
+{
+    t = <TEXTBF> { space = checkforPreviousSpace(t); }
+    (
+        s = character() { s = getLetterCode("\\textbf") + s; } |
+	    s = bracketcontent() { s = bold(s); }
+    )
+    {
+        if (space) {
+    	    return " " + s;
+        }
+        return s;
+    }
+}
+
+String ignore() :
+{
+    Token t;
+    boolean space;
+    String s = null;
+}
+{
+    (t = <TEXTSC> | t = <HUGE>) { space = checkforPreviousSpace(t); }
+    (
+        s = character()
+        {
+            // s = getLetterCode("\\textit") + s;
+	    }
+	    |
+        s = bracketcontent()
+        {
+            // s = "\u2820\u2804\u2838" + s + "\u2838\u2820\u2804";
+	    }
+    )
+    {
+        if (space) {
+    	    return " " + s;
+        }
+        return s;
+    }
+}
+
+String textit() :
+{
+  Token t;
+  boolean space;
+  String s = null;
+}
+{
+    (t = <TEXTIT> | t = <EMPH>) { space = checkforPreviousSpace(t); }
+    (
+        s = character() { s = getLetterCode("\\textit") + s; } |
+	    s = bracketcontent()
+	    {
+	        // TODO: Fix the following...
+	        s = getLetterCode("\\textit-open")+ s + getLetterCode("\\textit-close");
+	    }
+    )
+    {
+	    if (space) {
+    	    return " " + s;
+        }
+        return s;
+    }
+}
+
+String textcircled() :
+{
+  Token t;
+  boolean space;
+  String s = null;
+}
+{
+    t = <TEXTCIRCLED> { space = checkforPreviousSpace(t); }
+    (
+        (s = character() |
+	    	s = bracketcontent())
+	    {
+	        // TODO: Fix the following...
+	        s = getLetterCode("\\textcircled-open")+ s + getLetterCode("\\textcircled-close");
+	    }
+    )
+    {
+	    if (space) {
+    	    return " " + s;
+        }
+        return s;
+    }
+}
+
+String latextonemethallcaps() :
+{
+	Token t;
+	String s = null;
+	boolean space;
+}
+{
+	t = <LTNALLCAPS> { space = checkforPreviousSpace(t); }
+	(s = character() |
+	    	s = bracketcontent())
+	    	{
+		s = getLetterCode("b-allcaps") + s + getLetterCode("e-allcaps");
+ 	if (space) {
+    	    return " " + s;
+        }
+		return s;
+	    	  }
+	
+}
+
+void input() :
+{
+    String s, filepath = "";
+    StringBuffer buffer = new StringBuffer();
+}
+{
+    (
+        (
+            <INPUT> <LCB> (s = character_no_braille() { buffer.append(s); })+ <RCB>
+            { filepath = buffer.toString(); }
+        )
+	    |
+        (
+	        <INCLUDE> <LCB> (s = character_no_braille() { buffer.append(s); })+ <RCB>
+	        { filepath = buffer.toString() + ".tex"; }
+        )
+    )
+    {
+        try {
+	        System.out.println("PARSING FILE: " + filepath);
+	        FileInputStream is = new FileInputStream(filepath);
+            InputStreamReader fis = new InputStreamReader(is, "ISO-8859-7");
+	        Latex parser = new Latex (fis);
+            parser.topcontent();
+            System.out.println("EXITING PARSING: " + filepath);
+            fis.close();
+            is.close();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+	}
+}
+
+String accent() :
+{
+    String s = "", c = "";
+}
+{
+    <ACCENT> (c = character_no_braille() | <LCB> c = character() (character_no_braille())* <RCB>)
+    {
+        if (c.equals("e")) {
+            s = getLetterCode("e-grave");
+        }
+		// ...
+        return s;
+    }
+}
+
+String grave() :
+{
+    String s = "", c = "";
+}
+{
+    <GRAVEACCENT> (c = character_no_braille() | <LCB> c = character() (character_no_braille())* <RCB>)
+    {
+        if (c.equals("e")) {
+			 s = getLetterCode("e-accent");
+         }
+		// ...
+        return s;
+    }
+}
+
+String chapter() :
+{
+    String s = "", label = "";
+}
+{
+    <CHAPTER> s = command_parameter() [LOOKAHEAD(1) label = label()]
+    {
+        try {
+            output.flush(); // We are always sure that the existing output stream is not closed...
+            output.close();
+            parsedChapters.put(chapter, output.toString());
+            output = new StringWriter();
+	    } catch(IOException ioe) {
+		    ioe.printStackTrace();
+        }
+        chapter++;
+        section = 0;
+        subsection = 0;
+        if (label.equals("")) {
+	  	    label = getLetterCode("NUMBER-SYMBOL") + string2Braille(Integer.toString(chapter));
+        }
+  	    return "\n" + string2Braille("Κεφάλ") + getLetterCode("αι") + string2Braille("ο ") + label + s + "\n";
+    }
+}
+
+String section() :
+{
+    String s = "", label = "", option = "";
+}
+{
+    <SECTION> [<LBRA> option = option() <RBRA>] s = command_parameter() [LOOKAHEAD(1) label = label()]
+    {
+        section++;
+        subsection = 0;
+        for (Theorem theorem: theorems.values()) {
+            theorem.resetCounter();
+        }
+        if (label.equals("")) {
+	  	    label = getLetterCode("NUMBER-SYMBOL") +	string2Braille(Integer.toString(section));
+        }
+        return option + " " + label + s + "\n   ";
+  	}
+}
+
+String subsection() :
+{
+    String s = "", label = "", option = "";
+}
+{
+    <SUBSECTION> [<LBRA> option = option() <RBRA>] s = command_parameter() [LOOKAHEAD(1) label = label()]
+    {
+        subsection++;
+        return option + " " + label + s + "\n";
+  	}
+}
+
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////// MATHEMATICS /////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+
+// put the stuff here...
+String math() :
+{
+    Expression e;
+    String s = "", label = "";
+}
+{
+    //consider that a label can be only placed in the beginning or in the end of a math expression:
+//    [label = label()]
+    e = mathexpression()
+    [label = label()]
+	{
+        e.assignFractionLevel();
+        e.assignOtherLevels();
+        
+        e.getBraille();
+
+        s = e.createBox().toString(); // TODO: Possibly does not work with arrays
+	}
+	{
+		if (!e.getLabel().equals("")) {
+			s = s + getMathCode("(") + label + getMathCode(")");
+        }
+        return  s ;
+	}
+}
+
+Token mathcharacter() :
+{
+  	Token t;
+}
+{
+    // TODO: We should not allow diphthongs in math mode. Put it out as soon as mathrm etc. are implemented.
+    (
+        t = <ENGLISHLETTER> | t= <TEXTSYMBOL> | t = myDigit() | t = <GREEKLETTER> | 
+        t = <DIPHTHONG> | t = <MATHSYMBOL> | t = mathDelimiter()
+    )
+    { return t; }
+}
+
+Token mathcharacter_no_brackets() :
+{
+  	Token t;
+}
+{
+    // TODO: We should not allow diphthongs in math mode. Put it out as soon as mathrm etc. are implemented.
+    (
+        t = <ENGLISHLETTER> | t = <TEXTSYMBOL> | t = myDigit() |
+        t = <GREEKLETTER> | t = <DIPHTHONG> | t = <MATHSYMBOL> | t = mathDelimiter_no_brackets()
+    )
+    { return t; }
+}
+ 
+// A math expression should not be empty...
+Expression mathexpression() :
+{
+    Expression exp;
+    MathExpression mex = new MathExpression(table);
+	Expression exp1, exp2;
+}
+{
+    (
+        LOOKAHEAD(simpleexpression())(exp = simpleexpression()  {   mex.addChild(exp); })
+    )+
+	{ return mex; }
+}
+
+Expression mathexpression_no_brackets() :
+{
+    Expression exp;
+    MathExpression mex = new MathExpression(table);
+}
+{
+	(
+        LOOKAHEAD(simpleexpression_no_brackets())(exp = simpleexpression_no_brackets()  {  mex.addChild(exp); })
+    )+
+	{ return mex; }
+}
+
+Expression atomicmath() :
+{
+    Token t;
+    Expression exp = new EmptyExpression();
+    MathCommand cmd;
+    String oper;
+}
+{ 
+    (
+        (t = <COMMAND> | t = mathcharacter())
+        {
+	        String s = t.image.toString();
+
+		    cmd = commandMathTable.get(t.image); 	
+            if (cmd != null) { // User defined command
+
+			    InputStream targetStream = null;
+			
+                try{
+			        targetStream = new ByteArrayInputStream(cmd.body.getBytes("ISO-8859-7"));
+		        } catch(Exception e){e.printStackTrace();}
+		
+                for (int i = 0; i < cmd.numOfParams;i++){
+		            cmd.params[i] = parameterexpression(); // This is the real	
+		        }
+			
+                Latex lparser = new Latex(table, new InputStreamReader(targetStream), cmd, commandMathTable, verbose);
+		        exp = lparser.mathexpression();
+            }
+            else {
+              oper = operatorsTable.get(t.image);
+   
+              if (oper != null) {
+                	 InputStream targetStream = null;
+			
+                try{
+			        targetStream = new ByteArrayInputStream(oper.getBytes("ISO-8859-7"));
+		        } catch(Exception e){e.printStackTrace();}
+		
+                Latex lparser = new Latex(table,
+                	new InputStreamReader(targetStream), preamble, verbose);
+		        exp = lparser.mathexpression();
+		        exp.setOperator(true);
+              }
+		 	   else { // Simple command or symbol
+
+	    	        if (t.kind == DIGIT0) {
+			            s =  "NUMBER-SYMBOL" + s; // see NemethTable (hack...)
+      	         	 }
+     	             exp = new SimpleExpression(s, table);
+           	 	}	
+         	}
+        }
+	    | //<LCB> exp = mathexpression() <RCB>
+		 (<LCB> [exp = mathexpression()] <RCB>) //, if you need empty expressions!
+    )
+    { return exp; }
+}
+
+Expression mathparam() :
+{
+	Token t;
+	int nParam;
+}
+{
+	t=<PARAM>{
+		nParam = Integer.parseInt(t.image.substring(1));
+		Expression parameter = this.currentMathMacro.params[nParam-1];
+		return parameter;
+	}	
+}
+
+Expression parameterexpression() :
+{
+    Token t;
+    Expression exp = null;
+}
+{
+    (
+        (t = <COMMAND> | t = mathcharacter())
+        {
+            String s = t.image.toString();
+	        if (t.kind == DIGIT0) {
+		        s = "NUMBER-SYMBOL" + s; // see NemethTable (hack...)
+            }
+            exp = new SimpleExpression(s, table);
+
+// Doing a lexical state transition syntactically. 
+// See http://www.engr.mun.ca/~theo/JavaCC-FAQ/SetState.txt
+// This is for reading each numerical digit as a different parameter 
+// (do not parse whole numerical expressions when reading parameters) .
+            if (DEFAULT != token_source.curLexState) {
+                Token root = new Token(), last = root;
+                root.next = null;
+
+                // First, we build a list of tokens to push back, in backwards order
+                while (token.next != null) {
+                    Token to = token;
+                    // Find the token whose token.next is the last in the chain
+                    while (to.next != null && to.next.next != null) {
+                        to = to.next;
+                    }
+
+                    // put it at the end of the new chain
+                    last.next = to.next;
+                    last = to.next;
+
+                    // If there are special tokens, these go before the regular tokens,
+                    // so we want to push them back onto the input stream in the order
+                    // we find them along the specialToken chain.
+                    if (to.next.specialToken != null) {
+                        Token tt = to.next.specialToken;
+                        while (tt != null) {
+                            last.next = tt;
+                            last = tt;
+                            tt.next = null;
+                            tt = tt.specialToken;
+                        }
+                    }
+                    to.next = null;
+                };
+
+                while (root.next != null) {
+                    jj_input_stream.backup(root.next.image.length());
+                    root.next = root.next.next;
+                }
+                jj_ntk = -1;
+                token_source.SwitchTo(DEFAULT);
+            }
+        }
+	    | <LCB> exp = mathexpression() <RCB>
+	    // <LCB> [exp = mathexpression()] <RCB>, if you need empty expressions!
+    )
+    { return exp; }
+}
+
+Expression atomicmath_no_brackets() :
+{
+    Token t;
+    Expression exp = null;
+}
+{
+    (
+        (t = <COMMAND> | t = mathcharacter_no_brackets())
+        {
+            String s = t.image.toString();
+            if (t.kind == DIGIT0) {
+                s = "NUMBER-SYMBOL" + s; // see NemethTable (hack...)
+            }
+            exp = new SimpleExpression(s, table);
+        }
+	    | <LCB> exp = mathexpression_no_brackets() <RCB>
+	    // <LCB> [exp = mathexpression()] <RCB>, if you need empty expressions!
+    )
+    { return exp; }
+}
+
+Expression parameterexpression_no_brackets() :
+{
+    Token t;
+    Expression exp = null;
+}
+{
+    (
+        (t = <COMMAND> | t = mathcharacter_no_brackets())
+        {
+            String s = t.image.toString();
+	        if (t.kind == DIGIT0) {
+		        s = "NUMBER-SYMBOL" + s; // see NemethTable (hack...)
+            }
+            exp = new SimpleExpression(s, table);
+
+            if (DEFAULT != token_source.curLexState) {
+                Token root = new Token(), last = root;
+                root.next = null;
+
+                // First, we build a list of tokens to push back, in backwards order
+                while (token.next != null) {
+                    Token to = token;
+                    // Find the token whose token.next is the last in the chain
+                    while (to.next != null && to.next.next != null) {
+                        to = to.next;
+                    }
+
+                    // put it at the end of the new chain
+                    last.next = to.next;
+                    last = to.next;
+
+                    // If there are special tokens, these go before the regular tokens,
+                    // so we want to push them back onto the input stream in the order
+                    // we find them along the specialToken chain.
+
+                    if (to.next.specialToken != null) {
+                        Token tt = to.next.specialToken;
+                        while (tt != null) {
+                            last.next = tt;
+                            last = tt;
+                            tt.next = null;
+                            tt = tt.specialToken;
+                        }
+                    }
+                    to.next = null;
+                };
+
+                while (root.next != null) {
+                    jj_input_stream.backup(root.next.image.length());
+                    root.next = root.next.next;
+                }
+                jj_ntk = -1;
+                token_source.SwitchTo(DEFAULT);
+            }
+        }
+	    | <LCB> exp = mathexpression_no_brackets() <RCB>
+	    // <LCB> [exp = mathexpression()] <RCB>, if you need empty expressions!
+    )
+    { return exp; }
+}
+
+Expression envsmathmode():
+{
+	Expression exp = null;
+
+  	Token nameToken = null;
+  	String tokenName;
+  	Theorem theorem = null;
+  	String option = "", label = "";
+}
+{
+   <BEG>   (
+   	 exp = array()  |
+   	 exp = matrix() |
+   	 exp = bmatrix() |
+   	 exp = pmatrix() |
+   	 exp = Bmatrix() |
+   	 exp = vmatrix() |
+   	 exp = Vmatrix() |
+   	 exp = cases() |
+   	 exp = split() |
+   	 exp = ignoreenvironment() 
+    )
+ /*
+  	{
+  	  	tokenName = nameToken.image;
+
+		switch(tokenName) {
+			case "array" : case "subarray":
+				exp = array();
+				break;
+			case "matrix" : case "smallmatrix":
+				exp = matrix();
+				break;
+			case "pmatrix" :
+				exp = pmatrix();
+				break;
+			case "bmatrix" :
+				exp = bmatrix();
+				break;
+			case "Batrix" :
+				exp = Bmatrix();
+				break;
+			case "vmatrix" :
+				exp = vmatrix();
+				break;
+			case "Vatrix" :
+				exp = Vmatrix();
+				break;
+			case "cases" :
+				exp = cases(); // This is the environment...
+				break;
+			case "split" :
+				exp = split();
+				break;
+			case "aligned": case "gathered": case "alignedat": 
+				exp = matrix(); //Done as matrix!
+				break;
+			case "subequations" :
+				exp = ignoreenvironment(); // Ignore but output content...
+				break;
+			default:
+				System.out.println("Unknown math environment " + tokenName);
+				exp = new EmptyExpression();
+				break;
+		}
+  }*/
+	
+//  	<END> <ENVNAME > <ENVEND>
+  	{ return exp; }
+}
+
+
+
+Expression basicexpression() :
+{
+    Expression exp=null;
+}
+{ 
+    (
+		exp = envsmathmode() | // Environments in math mode
+        exp = mathcommand() |
+        exp = atomicmath() |
+ 		exp = cases_command() |
+        exp = leftright() | /* This could possibly be in atomic math non-terminal. Check. */
+        exp = modifiedMathDelimiter() |/* This could possibly be in atomic math non-terminal. Check. */
+		exp = mathparam()    
+	)
+    { return exp; }
+}
+
+Expression basicexpression_no_brackets() :
+{
+    Expression exp=null;
+}
+{
+    (
+        exp = mathcommand() |
+        exp = atomicmath_no_brackets() |
+//        exp = array() |
+        exp = leftright() |
+        exp = modifiedMathDelimiter()
+    )
+    { return exp; }
+}
+
+ Expression supsub(Expression exp) :
+ {
+    Expression exp1 = null, exp2, exp3;
+    boolean limits=false, nolimits=false; 
+ }
+ {
+	(	  <NOLIMITS> {limits=false; nolimits = true;} |
+	  <LIMITS> {limits=true; nolimits = false;} )*
+	
+     (  
+        (
+            <SUP> exp2 = basicexpression() 
+            { 
+                exp1 = exp; 
+                if (exp1.isOperator() && !nolimits || limits) { 
+                    exp =  createOverExp(exp1,exp2);
+                    //exp = new Over(exp1,exp2,table);
+                }
+                else if (!exp1.isOperator() && !limits || nolimits) 
+                    exp = new Sup(exp1, exp2, table);
+                    
+            }
+            [LOOKAHEAD(1) <SUB> exp3 = basicexpression() 
+            { 
+                 if (exp1.isOperator() && !nolimits || limits) {
+                   //exp =  createOverUnderExp(exp1, exp3, exp2);
+                   exp = new OverUnder(exp1, exp2,exp3,table);
+                }
+                else if (!exp1.isOperator() && !limits || nolimits) { 
+                    exp = new SubSup(exp1, exp3, exp2, table);
+                  }
+            }]
+        )
+        |
+        (
+            <SUB> exp2 = basicexpression() 
+            { 
+                exp1 = exp;
+                if (exp1.isOperator() && !nolimits || limits) {
+                    //exp =  createUnderExp(exp1,exp2);
+                    exp = new Under(exp1,exp2,table);
+                }
+                else  if  (!exp1.isOperator() && !limits || nolimits) 
+                    exp = new Sub(exp1, exp2, table); 
+            }
+            [LOOKAHEAD(1) <SUP> exp3 = basicexpression() 
+            { 
+                if (exp1.isOperator() && !nolimits || limits) {
+                   // exp =  createOverUnderExp(exp1, exp2, exp3);
+                    exp = new OverUnder(exp1,exp2,exp3,table); // Here is the error!
+                }
+                else if (!exp1.isOperator() && !limits || nolimits) { 
+                    exp = new SubSup(exp1, exp2, exp3, table);
+ 
+                  }
+            }]
+        )
+    )
+    { return exp; }
+ }
+
+Expression simpleexpression() :
+{
+    Token t;
+    Expression exp = null, exp1 = null, exp2, exp3;
+}
+{
+    (
+        (
+	        exp = basicexpression()
+		    [LOOKAHEAD(1) (exp = supsub(exp))]
+        /*(
+                (
+                    <SUP> exp2 = basicexpression() { exp1 = exp; exp = new Sup(exp1, exp2, table);  }
+                    [LOOKAHEAD(1) <SUB> exp3 = basicexpression() { exp = new SubSup(exp1, exp3, exp2, table); }]
+                )
+                |
+                (
+                    <SUB> exp2 = basicexpression() { exp1 = exp; exp = new Sub(exp1, exp2, table); }
+                    [LOOKAHEAD(1) <SUP> exp3 = basicexpression() { exp = new SubSup(exp1, exp2, exp3, table); }]
+                )
+            )*/ 
+        )
+        |
+		(
+            { exp = new EmptyExpression(); }
+            (exp = supsub(exp))
+		    /*(
+		        (
+		            <SUP> exp2 = basicexpression() { exp1 = exp; exp = new Sup(exp1, exp2, table); }
+		            [LOOKAHEAD(1) <SUB> exp3 = basicexpression() { exp = new SubSup(exp1, exp3, exp2, table); }]
+                )
+			    |
+			    (
+			        <SUB> exp2 = basicexpression() { exp1 = exp; exp = new Sub(exp1, exp2, table); }
+		            [LOOKAHEAD(1) <SUP> exp3 = basicexpression() { exp = new SubSup(exp1, exp2, exp3, table); }]
+                )
+		    )*/
+        )
+    )
+    { return exp; }
+}
+
+Expression simpleexpression_no_brackets() :
+{
+    Token t;
+    Expression exp = null, exp1 = null, exp2, exp3;
+}
+{
+    (
+        (
+	        exp = basicexpression_no_brackets()
+		    [ LOOKAHEAD(1) exp = supsub(exp)]
+            /*
+            (
+		        (
+		            <SUP> exp2 = basicexpression_no_brackets()
+		            { exp1 = exp; exp = new Sup(exp1, exp2, table); }
+		            [LOOKAHEAD(1) <SUB> exp3 = basicexpression_no_brackets() { exp = new SubSup(exp1, exp3, exp2, table); }]
+                )
+			    |
+			    (
+			        <SUB> exp2 = basicexpression_no_brackets()
+			        { exp1 = exp; exp = new Sub(exp1, exp2, table); }
+		            [LOOKAHEAD(1) <SUP> exp3=basicexpression_no_brackets() { exp = new SubSup(exp1, exp2, exp3, table); }]
+                )
+		    )]*/
+        )
+        |
+		(
+            { exp = new EmptyExpression(); } (exp = supsub(exp))
+		/*    (
+		        (
+		            <SUP> exp2 = basicexpression_no_brackets()
+		            { exp1 = exp; exp = new Sup(exp1, exp2, table); }
+                    [LOOKAHEAD(1) <SUB> exp3 = basicexpression_no_brackets() { exp = new SubSup(exp1, exp3, exp2, table); }]
+                )
+			    |
+			    (
+			        <SUB> exp2 = basicexpression_no_brackets()
+			        { exp1 = exp; exp = new Sub(exp1, exp2, table); }
+		            [LOOKAHEAD(1) <SUP> exp3=basicexpression_no_brackets() { exp = new SubSup(exp1, exp2, exp3, table); }]
+                )
+		    )
+            */
+        )
+    )
+    { return exp; }
+}
+
+
+Expression mathcommand() :
+{
+    Expression exp = null;
+}	
+{ 
+    (
+        exp = sqrt() | exp = cuberoot()| exp = forthroot()| exp = frac() |
+        exp = cfrac() | exp = textinmath() |
+        exp = latinmath() | exp = mathbb() | exp = mathcal() |
+        exp = underbrace() | exp = overbrace() | exp = dot() |
+        exp = overline() | exp = underline() | exp = tilde() | exp = vec() |
+        exp = lenqno() | exp = binom() | exp = hat() |
+        exp = bar() | exp = stackrel() | exp = check() | exp = acute() | exp = gravemath() |
+        exp = breve() | exp = ddot() | exp = mathring() | 
+        exp = overset() | exp = underset() | exp = overunderset() | exp = sideset()|
+        exp = operatorname() | exp=mod()| exp=pmod() | exp = pod() |
+        exp = variousCommandsAfter() | exp = variousCommandsBefore()|
+        exp = mathlabel() | exp = substack()| exp = ignorecommand() |
+        exp = xleftarrow() | exp = xrightarrow()
+    )
+    { return exp; }
+}
+
+//TODO: Fix.
+Expression [] row() :
+{
+    Expression exp = null;
+    Vector<Expression> expressions =  new Vector<Expression>();
+    Expression[] exparray;
+    int hdots;
+    boolean empty = true;
+}
+{
+    [( exp = mathexpression() { expressions.add(exp); empty = false;}
+    	|
+    	 hdots = hdotsfor() {
+    	   empty = false;
+    	   expressions.add(new HdotsforExpression(hdots));
+			for (int k = 1; k < hdots; k++) { 
+    	   		expressions.add(new EmptyExpression());
+    	  	}
+    	   }) ] { if (empty) expressions.add(new EmptyExpression()); empty = true;}
+    ( <AMPERSAND> [(exp = mathexpression() {expressions.add(exp); empty = false;}
+    	| hdots = hdotsfor() {
+    	  	empty = false;
+			expressions.add(new HdotsforExpression(hdots));
+			for (int k = 1; k < hdots; k++) { 
+    	   		expressions.add(new  EmptyExpression());
+    	  	}
+    	  }) ] { if (empty) expressions.add(new EmptyExpression()); empty = true;})*
+	{ if (expressions.size()==1 &&
+	expressions.elementAt(0) instanceof EmptyExpression)
+		expressions.remove(0);
+		return expressions.toArray(new Expression[expressions.size()]); }
+}
+
+Expression[] arrayrow(int cols) :
+{
+  	Expression exp;
+  	Expression [] expressions =  new Expression[cols];
+  	int col = 0, hdots;
+}
+{
+    [(exp = mathexpression() { expressions[col] = exp; }
+    	| hdots = hdotsfor() {
+    	  expressions[++col] = new HdotsforExpression(hdots);
+			for (int k = 1; k < hdots; k++) { 
+    	   		 expressions[++col] = new EmptyExpression();
+    	  	}
+      })]
+    ( <AMPERSAND> [(exp = mathexpression(){expressions[++col]=exp; }
+    | hdots = hdotsfor() {
+      		expressions[++col] = new HdotsforExpression(hdots);
+			for (int k = 1; k < hdots; k++) { 
+    	   		 expressions[++col] = new EmptyExpression();
+    	  	}
+       }) ] )*
+	{ return expressions; }
+}
+
+Expression cases() :
+{
+    Expression[] row = null;
+    Vector<Expression[]> rows = new Vector<Expression[]>();
+    int cols = 0;
+}
+{
+	< CASESENV > <ENVEND> 
+    row = arrayrow(2) { rows.add(row); }
+    (<NEWLINE> row = arrayrow(2) { rows.add(row); })*
+    <END> <CASESENV > <ENVEND>
+    {
+        Array array  = new Array(rows, table);
+        DelimiterExpression dexp = new DelimiterExpression("\\{",".", array, table);
+        return dexp;
+    }
+}
+
+//TODO: Fix empty row!
+Vector<Expression [] > parseArray():
+{
+  	Expression[] row; 
+  	Vector<Expression [] > rows =new Vector<Expression[] >();
+}
+{
+	row = row() {  if (row.length > 0) rows.add(row); }
+    (<NEWLINE> row = row() {   if (row.length > 0)   rows.add(row); })*
+    {
+      	return rows;
+    }
+}
+
+
+Expression ignoreenvironment() :
+{
+  	Expression exp = null;
+    
+}
+{
+	< SUBEQUATIONS> <ENVEND> 
+    exp = mathexpression()
+ 	<END> <SUBEQUATIONS > <ENVEND>
+    {
+    	return exp;    
+    }
+}
+Expression matrix() :
+{
+  
+    Vector<Expression[]> rows  = null;
+    int cols = 0;
+}
+{
+	(< MATRIX > | < SMALLMATRIX >|< ALIGNED >|< GATHERED >|< ALIGNEDAT >) <ENVEND> 
+    rows = parseArray()
+ 	<END> (< MATRIX > | < SMALLMATRIX >|< ALIGNED >|< GATHERED >|< ALIGNEDAT >) <ENVEND>
+    {
+        Array array  = new Array(rows, table);
+        return array;
+    }
+}
+
+Expression pmatrix() :
+{
+    Vector<Expression[]> rows = null;
+    int cols = 0;
+}
+{
+    < PMATRIX > <ENVEND> rows = parseArray() <END> <PMATRIX > <ENVEND>
+    {
+        Array array  = new Array(rows, table);
+        DelimiterExpression dexp = new DelimiterExpression("(",")", array, table);
+        return dexp;
+    }
+}
+
+Expression bmatrix() :
+{
+    Vector<Expression[]> rows = new Vector<Expression[]>();
+    int cols = 0;
+}
+{
+   < BMATRIX > <ENVEND> rows = parseArray() <END> <BMATRIX > <ENVEND>
+    {
+        Array array  = new Array(rows, table);
+        DelimiterExpression dexp = new DelimiterExpression("[","]", array, table);
+        return dexp;
+    }
+}
+
+Expression Bmatrix() :
+{
+    Vector<Expression[]> rows = new Vector<Expression[]>();
+    int cols = 0;
+}
+{
+   < BBMATRIX > <ENVEND> rows = parseArray() <END> <BBMATRIX > <ENVEND>
+    {
+        Array array  = new Array(rows, table);
+        DelimiterExpression dexp = new DelimiterExpression("\\{ ","\\}", array, table);
+        return dexp;
+    }
+}
+
+Expression vmatrix() :
+{
+    Vector<Expression[]> rows = new Vector<Expression[]>();
+    int cols = 0;
+}
+{
+   	< VMATRIX > <ENVEND> rows = parseArray() <END> <VMATRIX > <ENVEND>
+    {
+        Array array  = new Array(rows, table);
+        DelimiterExpression dexp = new DelimiterExpression("| ","|", array, table);
+        return dexp;
+    }
+}
+
+Expression Vmatrix() :
+{
+    Vector<Expression[]> rows = new Vector<Expression[]>();
+    int cols = 0;
+}
+{
+   < VVMATRIX > <ENVEND> rows = parseArray() <END> <VVMATRIX > <ENVEND>
+    {
+        Array array  = new Array(rows, table);
+        DelimiterExpression dexp = new DelimiterExpression("\\| ","\\|", array, table);
+        return dexp;
+    }
+}
+
+Expression cases_command() :
+{
+    Expression[] row = null;
+    Vector<Expression[]> rows = new Vector<Expression[]>();
+    int cols = 0;
+}
+{
+    <CASES> <LCB>row = cases_row() { rows.add(row); }
+    (<CR> [row = cases_row() { rows.add(row); }])*    <RCB> // A final <CR> at the end is permitted...
+    {
+        Array array  = new Array(rows, table);
+        DelimiterExpression dexp = new DelimiterExpression("\\{",".", array, table);
+        return dexp;
+    }
+}
+
+Expression[] cases_row() :
+{
+  	Expression exp;
+	String s;
+  	Expression [] expressions =  new Expression[2];
+}
+{
+    exp=mathexpression() { expressions[0] = exp; }
+     <AMPERSAND> s = content() {expressions[1] = new TextMathExpression(s,table); } // Careful!
+	{ return expressions; }
+}
+
+
+Expression array() :
+{
+    Expression[] row = null;
+    Vector<Expression[]> rows = new Vector<Expression[]>();
+    int cols = 0;
+}
+{
+//    <LCB> (<ENGLISHLETTER> { cols++; })* <RCB>
+//    row = arrayrow(cols) { rows.add(row); }
+//    (<NEWLINE> row = arrayrow(cols) { rows.add(row); })*
+	(< ARRAY > | < SUBARRAY >) <ENVEND> <LCB> (<ENGLISHLETTER> { cols++; })* <RCB>
+	rows = parseArray()
+    <END> (< ARRAY > | < SUBARRAY >)<ENVEND>
+    { return new Array(rows, table); }
+}
+
+MathExpression split() :
+{
+    Expression[] r;
+    MathExpression math = new MathExpression(table);
+}
+{
+   < SPLIT > <ENVEND> 
+    r = row()
+    {
+        for (Expression exp : r) {
+		    math.addChild(exp);
+        }
+        math.addChild(new SimpleExpression(" ", table));
+    }
+//    [label() { /* ignore label */ }]
+    (
+        <NEWLINE> //[LOOKAHEAD(1) <LBRA> mathexpression_no_brackets() <RBRA>]
+        { /* buffer.append(" "); */ }
+        r = row()
+        {
+            for (Expression exp : r) {
+        		// buffer.append(exp.getBraille());
+		        math.addChild(exp);
+            }
+            math.addChild(new SimpleExpression(" ", table));
+        }
+//        [label() { /* ignore label */ }]
+    )*
+  <END> <SPLIT> <ENVEND> 
+    {
+        return math;
+        // buffer.toString();
+    }
+}
+
+//TODO: fix.
+String eqnarray_align() :
+{
+	Vector<Expression[]> rows  = null;
+    Expression[] r;
+    StringBuffer buffer = new StringBuffer();
+    String label;
+}
+{
+    ("\\begin{eqnarray}" | "\\begin{eqnarray*}" |
+    "\\begin{align}" | "\\begin{align*}"|"\\begin{flalign}"|"\\begin{flalign*}" |
+    "\\begin{multiline}"|"\\begin{multiline*}"|
+    "\\begin{gather}"|"\\begin{gather*}"|      "\\begin{alignat }" < LCB > parameterexpression() < RCB > |
+       "\\begin{alignat*}" < LCB > parameterexpression() < RCB >
+       )
+ 		rows = parseArray()
+    ("\\end{eqnarray}" | "\\end{eqnarray*}" |
+    "\\end{multiline}"|"\\end{multiline*}"|
+    "\\end{align}" | "\\end{align*}"|"\\end{flalign}"| "\\end{flalign*}" |
+    "\\end{gather}"|"\\end{gather*}"|"\\end{alignat}"|"\\end{alignat*}")
+    {
+	
+      Array array = new Array(rows,table);
+      array.assignFractionLevel();
+      array.assignOtherLevels();
+      String str = array.getBraille();
+      return str; }
+}
+
+/*
+//This is a top level expression...
+String eqnarray_align() :
+{
+    Expression[] r;
+    StringBuffer buffer = new StringBuffer();
+    String label;
+}
+{
+    ("\\begin{eqnarray}" | "\\begin{eqnarray*}" | "\\begin{align}" | "\\begin{align*}")
+ 	[LOOKAHEAD(1) label = label()] 
+    r = row()
+    {
+        for (Expression exp : r) { //??
+            exp.assignFractionLevel();
+            exp.assignOtherLevels();
+    		buffer.append(exp.getBraille());
+        }
+    }
+    [label = label() { buffer.append(" " + getMathCode("(") + label+ getMathCode(")")); }]
+    (
+        <NEWLINE> //[LOOKAHEAD(1) <LBRA> mathexpression_no_brackets() <RBRA>]
+        { buffer.append(" "); }
+        r = row()
+        {
+            for (Expression exp : r) {
+                exp.assignFractionLevel();
+                exp.assignOtherLevels();
+		        buffer.append(exp.getBraille());
+            }
+            //TODO: Make an Array expression properly aligned
+        }
+        [label = label() { buffer.append(" " + getMathCode("(") + label+ getMathCode(")")); }]
+    )* 
+    ("\\end{eqnarray}" | "\\end{eqnarray*}" | "\\end{align}" | "\\end{align*}")
+    { return buffer.toString(); }
+}
+*/
+
+Expression operatorname():
+{
+  Expression exp = null;
+}
+{
+  (    < OPERATORNAME >|< OPERATORNAMESTAR >) exp = parameterexpression()
+    {
+      exp.setOperator(true);
+      return exp;
+    }
+
+}
+
+Expression substack():
+{
+  	Expression exp = null;
+  	Expression exp1 = null, exp2 = null;
+}
+{
+	< SUBSTACK > < LCB > exp1 = mathexpression() < NEWLINE > exp2 = mathexpression() < RCB >
+	{
+	   return new Over(exp2,exp1,table);
+	}
+}
+  
+void declaremathoperator():
+{
+  String newcommand, definition;
+  Token commandToken;
+  Token nParamToken=null;
+  StringBuffer def = new StringBuffer();
+  char c;
+  int n = 1;
+  int nParams = 0;
+ }
+{
+	(	  <DECLAREMATHOPERATOR > | < DECLAREMATHOPERATORSTAR >)
+	  	<LCB> commandToken = <COMMAND><RCB><LCB> 
+	{
+		//TODO: Complete.
+		// from newcommand...
+		char pc = ' ';
+		while(true){	
+			try {
+                c = jj_input_stream.readChar(); 
+            } catch(java.io.IOException ioe) {
+                System.out.println("End of file while reading operator definition..");
+                return;
+            }
+			if (n == 1 && c == '}') break;
+			else if (c=='}' && pc !='\\') n--;
+			else if (c=='{'&& pc !='\\') n++;
+			def.append(c);
+			pc = c;
+		}
+
+		definition = def.toString();
+		operatorsTable.put(commandToken.image,definition);
+	}
+	 
+}
+
+Fraction frac() :
+{
+    Expression nom, denom;
+}
+{
+    <FRAC> nom = parameterexpression() denom = parameterexpression()
+    { return new Fraction(nom, denom, table); }
+}
+
+Fraction cfrac() :
+{
+    Expression nom, denom;
+}
+{
+    <CFRAC> nom = parameterexpression() denom = parameterexpression()
+    { return new Cfrac(nom, denom, table); }
+}
+
+
+Sqrt sqrt() :
+{
+    Expression root;
+    Expression rank = null;
+    Token t;
+}
+{
+    <SQRT> [LOOKAHEAD(1) <LBRA> rank = mathexpression_no_brackets() <RBRA> {}] 
+	root = parameterexpression()
+	{
+	    if (rank != null) {
+	        return new Sqrt(root, rank, table);
+        }
+	    return new Sqrt(root, table);
+    } 
+}
+
+// This is a special kind of array...
+Expression leftright() :
+{
+  Token t1, t2;
+  Expression exp;
+}
+{
+    <LEFT> t1 = mathDelimiter() exp = mathexpression() <RIGHT> t2 = mathDelimiter()
+  	{ return new DelimiterExpression(t1.image, t2.image, exp, table); }
+}
+
+Expression latinmath() :
+{
+    Expression exp;
+    String s;
+}
+{
+    (<TEXTLATIN>) s = command_parameter()
+	{
+        String en = getLetterCode("EN");
+        s = en + s;
+        return new TextMathExpression(s, table);
+	}
+}
+
+int hdotsfor():
+{
+	Expression numberexp;
+	int num;
+}
+{
+	< HDOTSFOR > [<LBRA > mathexpression_no_brackets() <RBRA >]
+	<LCB > numberexp = mathexpression()<RCB >
+	{
+		num = ((MathExpression) numberexp).getIntegerValue();
+		
+	  	return num;
+	}
+	
+}
+
+Expression textinmath() :
+{
+    Expression exp;
+    String s;
+}
+{
+    (<TEXTRM> | <INTERTEXT> | < SHORTINTERTEXT > | <HBOX> | <MBOX>) s = command_parameter()
+	{ return new TextMathExpression(s, table); }
+}
+
+MathExpression mathbb() :
+{
+    Expression exp;
+    MathExpression newexp;
+}
+{
+    <MATHBB> exp = parameterexpression()
+	{
+        newexp = new MathExpression(table);
+	  	newexp.addChild(new SimpleExpression("\\mathbb", table));
+	  	newexp.addChild(exp);
+		return newexp;
+		//TODO: It should be an end symbol here, probably a space...
+	}
+}
+
+MathExpression mathcal() :
+{
+    Expression exp;
+    MathExpression newexp;
+}
+{
+    <MATHCAL> exp = parameterexpression()
+	{
+	  	newexp = new MathExpression(table);
+	  	newexp.addChild(new SimpleExpression("\\mathcal", table));
+	  	newexp.addChild(exp);
+		return newexp;
+	}
+}
+
+MathExpression breve() :
+{
+    Expression exp;
+    MathExpression newexp;
+}
+{
+    <BREVE> exp = parameterexpression()
+	{
+	  	newexp = new MathExpression(table);
+	  	newexp.addChild(exp);
+	  	newexp.addChild(new SimpleExpression("\\breve", table));
+	  	
+		return newexp;
+	}
+}
+
+MathExpression ddot() :
+{
+    Expression exp;
+    MathExpression newexp;
+}
+{
+    <DDOT> exp = parameterexpression()
+	{
+	  	newexp = new MathExpression(table);
+	  	newexp.addChild(exp);
+	  	newexp.addChild(new SimpleExpression("\\ddot", table));
+	  	
+		return newexp;
+	}
+}
+
+MathExpression mathring() :
+{
+    Expression exp;
+    MathExpression newexp;
+}
+{
+    <MATHRING> exp = parameterexpression()
+	{
+	  	newexp = new MathExpression(table);
+	  	newexp.addChild(exp);
+	  	newexp.addChild(new SimpleExpression("\\mathring", table));
+	  
+		return newexp;
+	}
+}
+
+MathExpression mod() :
+{
+  Expression exp; MathExpression newexp;
+}
+{
+	(< MOD >|< BMOD >) exp = parameterexpression()
+	{
+	  	newexp = new MathExpression(table);
+
+	  	newexp.addChild(new SimpleExpression("\\mod",table));
+		newexp.addChild(exp);
+	  	newexp.addChild(new SimpleExpression(" ",table));
+		return newexp;
+	}
+}
+
+MathExpression pmod() :
+{
+  Expression exp; MathExpression newexp;
+}
+{
+	< PMOD > exp = parameterexpression()
+	{
+	  	newexp = new MathExpression(table);
+		newexp.addChild(new SimpleExpression("(",table));
+	  	newexp.addChild(new SimpleExpression("\\mod",table));
+		newexp.addChild(exp);
+	  	newexp.addChild(new SimpleExpression(")",table));
+		return newexp;
+	}
+}
+
+MathExpression pod() :
+{
+  Expression exp; MathExpression newexp;
+}
+{
+	< POD > exp = parameterexpression()
+	{
+	  	newexp = new MathExpression(table);
+	  	newexp.addChild(new SimpleExpression(" ",table));
+		newexp.addChild(new SimpleExpression("(",table));
+		newexp.addChild(exp);
+	  	newexp.addChild(new SimpleExpression(")",table));
+		return newexp;
+	}
+}
+
+MathExpression xleftarrow() :
+{
+  Expression optexp = null, exp = null;
+  MathExpression newexp;
+}
+{
+	< XLEFTARROW > [LOOKAHEAD(1) <LBRA >  optexp=mathexpression_no_brackets()< RBRA >] exp = parameterexpression()
+	{
+	  	newexp = new MathExpression(table);
+	  	newexp.addChild(new SimpleExpression("\\xleftarrow",table));
+	  	if (optexp != null) {
+			newexp.addChild(new SimpleExpression("\\underset",table));
+			newexp.addChild(optexp);
+	  	}
+	
+	  	newexp.addChild(new SimpleExpression("\\overset",table));
+		newexp.addChild(exp);
+	  	newexp.addChild(new SimpleExpression("\\dot-end",table));
+		return newexp;
+	}
+}
+
+MathExpression xrightarrow() :
+{
+  Expression optexp = null, exp = null; MathExpression newexp;
+}
+{
+	< XRIGHTARROW > [LOOKAHEAD(1) <LBRA >  optexp=mathexpression_no_brackets()< RBRA >] exp = parameterexpression()
+	{
+	  	newexp = new MathExpression(table);
+	  	newexp.addChild(new SimpleExpression("\\xrightarrow",table));
+	  	if (optexp != null) {
+			newexp.addChild(new SimpleExpression("\\underset", table));
+			newexp.addChild(optexp);
+	  	}
+	  	
+	  	newexp.addChild(new SimpleExpression("\\overset", table));
+		newexp.addChild(exp);
+	  	newexp.addChild(new SimpleExpression("\\dot-end",table));
+		return newexp;
+	}
+}
+//MathExpression overleftarrow() :
+//{
+//  Expression exp; MathExpression newexp;
+//}
+//{
+//	< OVERLEFTARROW >  exp = parameterexpression()
+//	{
+//	  	
+//	  	newexp = createOverExp(exp,new SimpleExpression("\\leftarrow",table));
+//		return newexp;
+//	}
+//}
+//
+//MathExpression overrightarrow() :
+//{
+//  Expression exp; MathExpression newexp;
+//}
+//{
+//	< OVERRIGHTARROW >  exp = parameterexpression()
+//	{
+//	  	
+//	  	newexp = createOverExp(exp,new SimpleExpression("\\rightarrow",table));
+//		return newexp;
+//	}
+//}
+//
+//MathExpression overleftrightarrow() :
+//{
+//  Expression exp; MathExpression newexp;
+//}
+//{
+//	< OVERLEFTRIGHTARROW >  exp = parameterexpression()
+//	{
+//	  	
+//	  	newexp = createOverExp(exp,new SimpleExpression("\\leftrightarrow",table));
+//		return newexp;
+//	}
+//}
+//
+//MathExpression underleftarrow() :
+//{
+//  Expression exp; MathExpression newexp;
+//}
+//{
+//	< UNDERLEFTARROW >  exp = parameterexpression()
+//	{
+//	  	
+//	  	newexp = createUnderExp(exp,new SimpleExpression("\\leftarrow",table));
+//		return newexp;
+//	}
+//}
+//
+//MathExpression underrightarrow() :
+//{
+//  Expression exp; MathExpression newexp;
+//}
+//{
+//	< UNDERRIGHTARROW >  exp = parameterexpression()
+//	{
+//	  	
+//	  	newexp = createUnderExp(exp,new SimpleExpression("\\rightarrow",table));
+//		return newexp;
+//	}
+//}
+//
+//MathExpression underleftrightarrow() :
+//{
+//  Expression exp; MathExpression newexp;
+//}
+//{
+//	< UNDERLEFTRIGHTARROW >  exp = parameterexpression()
+//	{
+//	  	
+//	  	newexp = createUnderExp(exp,new SimpleExpression("\\leftrightarrow",table));
+//		return newexp;
+//	}
+//}
+
+
+MathExpression vec() :
+{
+  Expression exp; MathExpression newexp;
+}
+{
+	< VEC >  exp = parameterexpression()
+	{
+	  	newexp = new MathExpression(table);
+
+	  	newexp.addChild(new SimpleExpression("\\vec-begin",table));
+		newexp.addChild(exp);
+	  	newexp.addChild(new SimpleExpression("\\vec-end",table));
+	  	
+		return newexp;
+	}
+}
+
+MathExpression hat() :
+{
+    Expression exp;
+    MathExpression newexp;
+}
+{
+    (<HAT>| < WIDEHAT >) exp = parameterexpression()
+	{
+	  	newexp = new MathExpression(table);
+		newexp.addChild(exp);
+	  	newexp.addChild(new SimpleExpression("\\hat", table));
+		return newexp;
+	}
+}
+
+MathExpression overline() :
+{
+    Expression under, sub = null;
+    MathExpression newexp;
+}
+{
+	<OVERLINE> under = parameterexpression()
+	{
+	  	newexp = new MathExpression(table);
+	  	newexp.addChild(new SimpleExpression("\\overline-begin", table));
+	  	newexp.addChild(under);
+		newexp.addChild(new SimpleExpression("\\overline-end", table));
+    }
+	{ return newexp; }
+}
+
+MathExpression underline() :
+{
+    Expression under, sub = null;
+    MathExpression newexp;
+}
+{
+	<UNDERLINE> under = parameterexpression()
+	{
+	  	newexp = new MathExpression(table);
+	  	newexp.addChild(new SimpleExpression("\\underline-begin", table));
+	  	newexp.addChild(under);
+		newexp.addChild(new SimpleExpression("\\underline-end", table));
+    }
+	{ return newexp; }
+}
+
+MathExpression dot() :
+{
+    Expression under, sub = null;
+    MathExpression newexp;
+}
+{
+	<DOT> under = parameterexpression()
+	{
+	  	newexp = new MathExpression(table);
+	  	newexp.addChild(new SimpleExpression("\\dot-begin", table));
+	  	newexp.addChild(under);
+		newexp.addChild(new SimpleExpression("\\dot-end", table));
+    }
+	{ return newexp; }
+}
+
+
+MathExpression binom() :
+{
+    Expression under, sub = null;
+    MathExpression newexp;
+}
+{
+	< BINOM > under = parameterexpression() sub = parameterexpression()
+	{
+	  	newexp = new MathExpression(table);
+	  	newexp.addChild(new SimpleExpression("(", table));
+	  	newexp.addChild(under);
+		newexp.addChild(new SimpleExpression("\\binom", table));
+		newexp.addChild(sub);
+		newexp.addChild(new SimpleExpression(")", table));
+    }
+	{ return newexp; }
+}
+
+
+// TODO: Ignore command should totally ignore the command,
+// not just put the argument in the output.
+Expression ignorecommand() :
+{
+    Expression exp = null;
+}
+{
+	(	  (	  (	    <TEXTSC> | < BOXED >) exp = parameterexpression()
+	)
+	|
+	(
+	 (
+	  < DISPLAYBREAK > | < ALLOWDISPLAYBREAKS >)
+	  	[LOOKAHEAD(1) <LBRA >  mathexpression_no_brackets()< RBRA >] { exp = new EmptyExpression(); }
+	)
+	|
+	(
+	  < NUMBERWITHIN >   parameterexpression() parameterexpression() { exp = new EmptyExpression(); }
+	)
+	| 
+	(
+	  (	    < LEFTROOT > | < UPROOT >
+	  )  parameterexpression() { exp = new EmptyExpression(); }
+	)
+	|
+	( 
+	< SMASH >
+	  	[LOOKAHEAD(1) <LBRA > mathexpression_no_brackets()< RBRA >]  exp = parameterexpression()
+	)
+	|
+	(
+	  	<RAISETAG > parameterexpression() { exp = new EmptyExpression();}	))
+
+	{ return exp; }
+}
+
+MathExpression underbrace() :
+{
+    Expression under, sub = null;
+    MathExpression newexp;
+}
+{
+	<UNDERBRACE> under = parameterexpression()
+	{
+	  	newexp = new MathExpression(table);
+	  	newexp.addChild(new SimpleExpression("\\underbrace-begin", table));
+	  	newexp.addChild(under);
+		newexp.addChild(new SimpleExpression("\\underbrace-middle", table));
+    }
+    [LOOKAHEAD(1) <SUB> sub = parameterexpression()
+	{
+		newexp.addChild(sub);
+		newexp.addChild(new SimpleExpression("\\underbrace-end", table));
+		newexp.addChild(new SimpleExpression(" ", table));
+	}]
+	{ return newexp; }
+}
+
+MathExpression overbrace() :
+{
+    Expression over, sup = null;
+    MathExpression newexp;
+}
+{
+    <OVERBRACE> over = parameterexpression()
+	{
+	  	newexp = new MathExpression(table);
+	  	newexp.addChild(new SimpleExpression("\\overbrace-begin", table));
+	  	newexp.addChild(over);
+		newexp.addChild(new SimpleExpression("\\overbrace-middle", table));
+    }
+    [LOOKAHEAD(1) <SUP> sup = parameterexpression()
+	{
+		newexp.addChild(sup);
+		newexp.addChild(new SimpleExpression("\\overbrace-end", table));
+		newexp.addChild(new SimpleExpression(" ", table));
+	}]
+	{ return newexp; }
+}
+
+MathExpression tilde() :
+{
+    Expression over, sup = null;
+    MathExpression newexp;
+}
+{
+    <TILDE> over = parameterexpression()
+    {
+        newexp = new MathExpression(table);
+	  	newexp.addChild(over);
+	  	newexp.addChild(new SimpleExpression("\\tilde", table));
+    }
+	{ return newexp; }
+}
+
+MathExpression lenqno() :
+{
+    Expression over, sup = null;
+    MathExpression newexp;
+}
+{
+    <LENQNO>  over = parameterexpression()
+	{
+	  	newexp = new MathExpression(table);
+	 	newexp.addChild(new SimpleExpression("\\lenqno", table));
+	  	newexp.addChild(over);
+    }
+	{ return newexp; }
+}
+
+
+MathExpression bar() :
+{
+    Expression over, sup = null;
+    MathExpression newexp;
+}
+{
+    <BAR> over = parameterexpression()
+	{
+	  	newexp = new MathExpression(table);
+	  	newexp.addChild(over);
+	  	newexp.addChild(new SimpleExpression("\\bar", table));
+    }
+	{ return newexp; }
+}
+
+MathExpression check() :
+{
+    Expression over, sup = null;
+    MathExpression newexp;
+}
+{
+    <CHECK>  over = parameterexpression()
+	{
+	  	newexp = new MathExpression(table);
+	  	newexp.addChild(over);
+	  	newexp.addChild(new SimpleExpression("\\check", table));
+    }
+	{ return newexp; }
+}
+
+MathExpression acute() :
+{
+    Expression over, sup = null;
+    MathExpression newexp;
+}
+{
+    <ACUTE>  over = parameterexpression()
+	{
+	  	newexp = new MathExpression(table);
+	  	newexp.addChild(over);
+	  	newexp.addChild(new SimpleExpression("\\acute", table));
+    }
+	{ return newexp; }
+}
+
+MathExpression gravemath() :
+{
+    Expression over, sup = null;
+    MathExpression newexp;
+}
+{
+    <GRAVE> over = parameterexpression()
+	{
+	  	newexp = new MathExpression(table);
+	  	newexp.addChild(over);
+	  	newexp.addChild(new SimpleExpression("\\grave", table));
+    }
+	{ return newexp; }
+}
+
+MathExpression stackrel() :
+{
+    Expression exp1, exp2;
+    MathExpression newexp;
+}
+{
+    <STACKREL> exp1  = parameterexpression() exp2 = parameterexpression()
+	{
+	  	newexp = new MathExpression(table);
+	  	newexp.addChild(new SimpleExpression("\\stackrel-begin", table));
+	  	newexp.addChild(exp1);
+		newexp.addChild(new SimpleExpression("\\stackrel-middle", table));
+		newexp.addChild(exp2);
+		newexp.addChild(new SimpleExpression("\\stackrel-end", table));
+		return newexp;
+	}
+}
+
+MathExpression overset() :
+{
+    Expression over, base = null;
+    
+}
+{
+    <OVERSET>  over = parameterexpression() base = parameterexpression()
+	{
+        return createOverExp(base,over);
+    }
+}
+
+MathExpression underset() :
+{
+    Expression under, base = null;
+}
+{
+    <UNDERSET>  under = parameterexpression() base = parameterexpression()
+	{
+	  	return createUnderExp(base,under);
+   }
+}
+
+MathExpression overunderset() :
+{
+    Expression under, over,base = null;
+}
+{
+    <OVERUNDERSET>  over = parameterexpression() 
+        under = parameterexpression()
+        base = parameterexpression()
+	{
+        return createOverUnderExp(base,under,over);
+    }
+}
+
+MathExpression sidesetparam():
+{
+   Expression ex = null;
+   MathExpression exp = null;
+   Expression insideExp = null;
+}
+{
+  	ex = mathexpression() {
+  		exp = (MathExpression) ex;	
+	// replace prime...
+  		for (int i=0; i < exp.getNumberOfChildren(); i++) {
+  		  Expression e = exp.getChild(i);
+  		  if (e instanceof SimpleExpression) {
+				SimpleExpression se = (SimpleExpression) e;
+				if (se.getTokenString().equals("'")) {
+				  Sup supexp = new Sup(new EmptyExpression(),se,table);
+				  exp.replace(i,supexp);
+  		  		}
+  		   }
+ 	 	}
+    }
+//  	  
+//  	if (exp.getNumOfChildren() == 1) {
+//		insideExp = exp.getChild(0);
+//		if (insideExp instanceof SimpleE) {
+//			Expression baseExp = ((AbstractSupSub) insideExp).getBase();
+//			if (baseExp instanceof EmptyExpression) {
+//			  //here we are! 
+//		}
+  	
+  	
+  	{ return exp; }
+}
+
+MathExpression sideset() :
+{
+    Expression oper=null;
+    Expression supsub = new EmptyExpression();
+    Expression first = new EmptyExpression();
+    Expression second = new EmptyExpression(); 
+    MathExpression newexp;
+}
+{
+	<SIDESET> <LCB> [first=sidesetparam()]<RCB>//[first = supsub(new EmptyExpression())] <RCB>
+		<LCB> [second = sidesetparam()] <RCB>//[second = supsub(new EmptyExpression())] <RCB>
+		 oper = atomicmath()  [LOOKAHEAD(1) (oper = supsub(oper))]
+	{
+	  	newexp = new MathExpression(table);
+	  	newexp.addChild(new SimpleExpression("\\dot-begin", table));
+	  	newexp.addChild(first);
+	  	newexp.addChild(oper);
+	  	newexp.addChild(second);
+		newexp.addChild(new SimpleExpression("\\dot-end", table));
+    }
+	{ return newexp; }
+}
+
+SimpleExpression modifiedMathDelimiter():
+{
+    Token mod, del;
+    SimpleExpression se;
+}
+{
+    ( mod = <DELIMITERSIZEMODIFIER> del = mathDelimiter())
+    {
+        String str = mod.image + del.image;
+        return new SimpleExpression(str, table);
+    }
+}
+
+Expression variousCommandsAfter():
+{
+   Token t = null; Expression exp = null;
+   MathExpression newexp=null;
+}
+{
+	(
+	  t=<OVERBAR> | t=<OVHOOK>| t=<OCIRC> |t=<CANDRA> |t=<OTURNEDCOMMA> |
+	  t=<OCOMMATOPRIGHT> |
+	t=<DROANG>|t= <LEFTHARPOONACCENT> |t=<RIGHTHARPOONACCENT>| t=<DDDOT> |t=<DDDDOT>|
+	<ANNUITY>| t=<WIDEBRIDGEABOVE>|
+	t=<ASTERACCENT> |t=<WIDETILDE> |t=<WIDEOVERBAR>| t=<WIDEBREVE>| t=<WIDECHECK>|
+	 t=<OVERLEFTHARPOON>|
+	t= <OVERRIGHTHARPOON> | t=<OVERLEFTARROW> |t=<OVERRIGHTARROW>|t= <OVERLEFTRIGHTARROW> |
+	t= <THREEUNDERDOT>| t=<MATHUNDERBAR> |t=<WIDEUTILDE>| t=<UNDERLEFTRIGHTARROW>|
+	 t=<UNDERRIGHTHARPOONDOWN>| t=<UNDERLEFTHARPOONDOWN>| t=<UNDERLEFTARROW>|
+	 t=<UNDERRIGHTARROW> | t=<OVERBRACKET> |t= <OVERPAREN> | t=<UNDERBRACKET>|
+	 <UNDERPAREN>) exp = parameterexpression ()
+	 { 	newexp = new MathExpression(table);
+	 	newexp.addChild(exp);
+		newexp.addChild(new SimpleExpression(t.image,table));
+	  	
+		return newexp; }
+}
+
+Expression variousCommandsBefore():
+{
+   Token t = null; Expression exp = null; MathExpression newexp = null;
+}
+{
+(   t=< VERTOVERLAY > |t= < NOTACCENT > |t= < LONGDIVISION > )
+	exp = parameterexpression ()
+	 { 	newexp = new MathExpression(table);
+	 	newexp.addChild(new SimpleExpression(t.image,table));
+	 	newexp.addChild(exp);
+	  	
+		return newexp; }
+}
+
+Sqrt cuberoot() :
+{
+    Expression root;
+  
+ 
+}
+{
+    <CUBEROOT> 
+	root = parameterexpression()
+	{
+	   
+	        return new Sqrt(root, new SimpleExpression("3",table), table);
+           } 
+}
+
+Sqrt forthroot() :
+{
+    Expression root;
+}
+{
+    <FORTHROOT> root = parameterexpression()
+	{
+	  return new Sqrt(root, new SimpleExpression("4",table), table);
+    } 
+}
+
