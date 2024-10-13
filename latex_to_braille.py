@@ -5,10 +5,7 @@ import subprocess
 import base64
 from pathlib import Path
 import re
-import time
 
-
-#========THIS IS FOR TEXT => BRAILLE ======================# 
 # Load the Braille mapping
 nemeth_json_path = os.path.join('latex2nemeth/encodings/nemeth.json')
 with open(nemeth_json_path, 'r', encoding='utf-8') as f:
@@ -26,102 +23,109 @@ def getBraille(text):
             braille += brailleMap[" "]
     return braille
 
-def text_to_braille(text):
-    return getBraille(text)
-
-
-
-#===========THIS IS FOR LATEX => NEMETH ======================# 
 def writeTex(eqns):
-    texFile = open("temp.tex", "w")
-    first = r"\documentclass[12pt, letterpaper, twoside]{article}" + "\n"
-    second = r"\usepackage[utf8]{inputenc}" + "\n\n"
-    begin = r"\begin{document}" + "\n"
-    end = r"\end{document}" + "\n"
-
-    with open("temp.tex", "r+") as texFile:
-        for l in [first, second, begin]:
-            texFile.write(l)
+    with open("temp.tex", "w") as texFile:
+        texFile.write(r"\documentclass[12pt, letterpaper, twoside]{article}" + "\n")
+        texFile.write(r"\usepackage[utf8]{inputenc}" + "\n\n")
+        texFile.write(r"\begin{document}" + "\n")
         for e in eqns:
-            if e['content'] is None:
-                continue
-            texFile.write("\\begin{equation}\n" + e['content'] + "\\end{equation}\n")
-        texFile.write(end)
+            if e['content'] is not None:
+                texFile.write("\\begin{equation}\n" + e['content'] + "\\end{equation}\n")
+        texFile.write(r"\end{document}" + "\n")
 
+def compile_latex(tex_file='temp.tex', aux_file='temp.aux'):
+    with open(tex_file, 'r') as f:
+        content = f.read()
 
-def compile_latex(tex_file='temp.tex'):
-    """Compile LaTeX file using pdflatex."""
-    try:
-        result = subprocess.run(["pdflatex", "-interaction=nonstopmode", "-file-line-error", tex_file], 
-                                check=True, capture_output=True, text=True)
-        print("LaTeX compilation successful")
-    except subprocess.CalledProcessError as e:
-        print(f"Error occurred during LaTeX compilation: {e}")
-    except FileNotFoundError:
-        print("pdflatex not found. Please ensure LaTeX is installed and in your system PATH.")
+    doc_class = re.search(r'\\documentclass.*{(.+?)}', content)
+    doc_class = doc_class.group(1) if doc_class else 'article'
 
-def texFile2Nemeth(tex_file="temp.tex", aux_file="temp.aux", jar_file="latex2nemeth/latex2nemeth.jar", nemeth_json="latex2nemeth/encodings/nemeth.json"):
-    """Convert LaTeX file to Nemeth braille using latex2nemeth.jar."""
+    packages = re.findall(r'\\usepackage.*{(.+?)}', content)
+    sections = re.findall(r'\\section{(.+?)}', content)
+    equations = re.findall(r'\\begin{equation}(.*?)\\end{equation}', content, re.DOTALL)
+
+    with open(aux_file, 'w') as f:
+        f.write('\\relax\n')
+        f.write(f'\\@input{{packages/{doc_class}.aux}}\n')
+        
+        for package in packages:
+            f.write(f'\\@input{{packages/{package}.aux}}\n')
+        
+        f.write('\\@writefile{toc}{\n')
+        for i, section in enumerate(sections, 1):
+            f.write(f'  \\contentsline {{section}}{{{section}}}{{{i}}}{{section*.{i}}}%\n')
+        f.write('}\n')
+
+        for i, equation in enumerate(equations, 1):
+            f.write(f'\\newlabel{{eq:{i}}}{{{{({i})}}{{1}}}}\n')
+
+        f.write('\\gdef \\@abspage@last{1}\n')
+
+    print(f"Simple AUX file '{aux_file}' has been created based on '{tex_file}'.")
+
+def texFile2Nemeth():
+    texFile = Path("temp.tex").resolve()
+    auxFile = Path("temp.aux").resolve()
+    nemethJson = Path("latex2nemeth/encodings/nemeth.json").resolve()
+    jarFile = Path("latex2nemeth/target/latex2nemeth.jar").resolve()
+
     cmd = [
         "java",
         "-jar",
-        str(Path(jar_file).resolve()),
-        str(Path(tex_file).resolve()),
-        str(Path(aux_file).resolve()),
+        str(jarFile),
+        str(texFile),
+        str(auxFile),
         "-e",
-        str(Path(nemeth_json).resolve())
+        str(nemethJson)
     ]
 
     try:
         result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-        print("LaTeX to Nemeth conversion successful")
+        print("Command executed successfully")
+        print("Output:", result.stdout)
     except subprocess.CalledProcessError as e:
-        print(f"Error occurred during LaTeX to Nemeth conversion: {e}")
+        print("Error occurred:", e)
+        print("Error output:", e.stderr)
     except FileNotFoundError:
         print("Java or the specified JAR file was not found. Please ensure Java is installed and the path to the JAR file is correct.")
 
-def readNemethFile(max_attempts=10, delay=1):
-    """Read the generated Nemeth file."""
-    for attempt in range(max_attempts):
-        nemeth_files = list(Path(".").glob("temp*.nemeth"))
-        if nemeth_files:
-            latest_nemeth_file = max(nemeth_files, key=os.path.getctime)
-            try:
-                with open(latest_nemeth_file, "rb") as nemethFile:
-                    nem = nemethFile.read()
-                    nem64 = base64.b64encode(nem)
-                    denem = base64.b64decode(nem64)
-                    return denem.decode("utf-16").split("\n\n")
-            except Exception as e:
-                print(f"Error reading nemeth file (attempt {attempt + 1}): {e}")
-        else:
-            print(f"Nemeth file not found. Attempt {attempt + 1} of {max_attempts}")
-        
-        if attempt < max_attempts - 1:
-            time.sleep(delay)
-    
-    raise FileNotFoundError("No temp*.nemeth file found after multiple attempts.")
+def readNemethFile():
+    with open("temp0.nemeth", "rb") as nemethFile:
+        nem = nemethFile.read()
+        nem64 = base64.b64encode(nem)
+        denem = base64.b64decode(nem64)
+        eqnNemeth = denem.decode("utf-16").split("\n\n")
+    return eqnNemeth
 
 def latex2Nemeth(equations):
-    """Convert LaTeX equations to Nemeth braille."""
-    opening, closing = "⠸⠩", "⠸⠱"
-    writeTex(equations)
-    compile_latex()
-    texFile2Nemeth()
-    eqnNemeth = readNemethFile()
+    opening, closing = "⠸⠩", "⠸⠱" 
+    writeTex(equations) #writing temp.tex file 
+    compile_latex('temp.tex', 'temp.aux') #making aux file
+    texFile2Nemeth() #converting tex to nemeth 
+    eqnNemeth = readNemethFile() #nemeth to readable utf-16 
     for i, eqn in enumerate(equations):
         if eqn['content'] is not None:
             eqn['braille'] = opening + eqnNemeth[i] + closing
     return equations
 
+def text_to_braille(text):
+    return getBraille(text)
 
 def latex_to_nemeth(latex):
     equations = [{'content': latex}]
     nemeth_equations = latex2Nemeth(equations)
     return nemeth_equations[0]['braille'] if nemeth_equations else ''
 
+def text2UEB(texts): #이 코드 있어야 하는지 점검! 
+    for txt in texts:
+        txt['braille'] = getBraille(txt['content'])
+    return texts
 
-
-def text_to_braille(text):
-    return getBraille(text)
-
+def writeToMasterBraille(brailleFile, parserOut, pageNo): #이 코드 있어야 하는지 점검! 
+    brailleFile.write("Page no: " + str(pageNo) + '\n')
+    brailleFile.write(getBraille("Page no: " + str(pageNo)) + '\n')
+    for x in parserOut:
+        if x['braille'] is not None:
+            print(x['id'], x['type'], x['braille'])
+            brailleFile.write(x['type'] + '\n')
+            brailleFile.write(x['braille'] + '\n\n')
