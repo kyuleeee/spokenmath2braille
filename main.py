@@ -1,6 +1,6 @@
 from speech_to_text import transcribe_audio
 from text_to_latex import correct_errors, spoken_math_detection, text_to_latex
-from latex_to_braille import latex_to_nemeth, text_to_braille
+from latex_to_braille import improved_text_to_latex ,  latex_to_nemeth , text_to_braille
 
 def detect_math_segments(text, math_detection_model):
     """
@@ -36,8 +36,17 @@ def process_math_segment(text, latex_translation_model):
     """
     수학 표현 세그먼트를 Nemeth Braille로 변환합니다.
     """
-    latex_text = text_to_latex(text.strip(), latex_translation_model)
-    return latex_to_nemeth(latex_text)
+    try:
+        # 텍스트를 개선된 LaTeX로 변환
+        latex_text = improved_text_to_latex(text.strip(), latex_translation_model)
+        
+        # LaTeX를 Nemeth Braille로 변환
+        nemeth_braille = latex_to_nemeth(latex_text)
+        
+        return nemeth_braille
+    except Exception as e:
+        print(f"Error in processing math segment: {e}")
+        return f"⠸⠩Error: Unable to convert '{text}'⠸⠱"  # 오류 발생 시 점자로 오류 메시지 반환
 
 def process_math_audio(audio_file, error_correction_model, latex_translation_model, math_detection_model):
     # 1. 음성을 텍스트로 변환
@@ -67,7 +76,7 @@ def main():
     audio_file = "temp.wav"
     error_correction_model = "Hyeonsieun/MathSpeech_T5_base_corrector"
     latex_translation_model = "Hyeonsieun/MathSpeech_T5_base_translator"
-    math_detection_model = "jeongyoun/distilbert-base-uncased-finetuned-ner-increased"  # 실제 모델 이름으로 변경해주세요
+    math_detection_model = "jeongyoun/mathbridge-bert-adapter-seq"  # 실제 모델 이름으로 변경해주세요
     
     result = process_math_audio(audio_file, error_correction_model, latex_translation_model, math_detection_model)
     
@@ -75,5 +84,4 @@ def main():
     for segment_type, content in result:
         print(f"{segment_type.capitalize()}: {content}")
 
-if __name__ == "__main__":
-    main()
+
