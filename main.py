@@ -6,7 +6,8 @@ def detect_math_segments(text, math_detection_model):
     """
     텍스트에서 수학 표현을 감지하고 세그먼트로 분리합니다.
     """
-    detected_labels = spoken_math_detection(text, math_detection_model)
+    
+    detected_labels = spoken_math_detection(text)
     
     segments = []
     current_segment = {"type": "text", "content": ""}
