@@ -25,7 +25,7 @@ This project converts spoken mathematical expressions into Braille, specifically
 ### Setup
 1. Clone the repository:
    ```bash
-   git clone https://github.com/your-repo/math-audio-to-braille.git
+   git clone https://github.com/kyuleeee/spokenmath2braille.git
    cd math-audio-to-braille
    ```
 2. Install dependencies:
