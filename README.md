@@ -67,7 +67,7 @@ Defines the models used and processes a sample audio file.
 ## Models Used
 - **Error Correction Model**: `Hyeonsieun/MathSpeech_T5_base_corrector`
 - **LaTeX Translation Model**: `Hyeonsieun/MathSpeech_T5_base_translator`
-- **Math Detection Model**: `jeongyoun/distilbert-base-uncased-finetuned-ner-increased`
+- **Math Detection Model**: `jeongyoun/distilbert-base-uncased-finetuned-ner-increased` -> for more information about Math Detection Model, Please refer to https://github.com/kyuleeee/MiBERT
 
 ## Output Format
 The final output consists of a list of tuples containing the segment type (`"text"` or `"math"`) and the corresponding Braille representation.
