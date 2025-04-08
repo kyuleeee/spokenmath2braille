@@ -16,31 +16,6 @@ This project converts spoken mathematical expressions into Braille, specifically
 - Converts standard text to Braille
 - Translates mathematical expressions into LaTeX and then into Nemeth Braille
 
-## Installation
-### Prerequisites
-- Python 3.7+
-- Required libraries: `torch`, `transformers`, `speechrecognition`, `numpy`
-- Pre-trained models for error correction, LaTeX translation, and math detection
-
-### Setup
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/kyuleeee/spokenmath2braille.git
-   cd math-audio-to-braille
-   ```
-2. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-## Usage
-### Running the Main Script
-To process an audio file and convert it to Braille, run:
-```bash
-python main.py
-```
-By default, it processes `temp.wav`. To use a different file, modify the `audio_file` variable in `main.py`.
-
 ## Code Structure
 ### `process_math_audio(audio_file, error_correction_model, latex_translation_model, math_detection_model)`
 Main function to process an audio file and generate mixed Braille output.
